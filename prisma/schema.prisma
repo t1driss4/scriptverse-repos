@@ -1,5 +1,5 @@
 // Prisma schema – ScriptVerse
-// Run: npx prisma migrate dev --name init
+// Run: npx prisma migrate dev --name add_courses_and_progress
 
 generator client {
   provider = "prisma-client-js"
@@ -10,21 +10,187 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
 enum Role {
   APPRENANT
   FORMATEUR
   ADMIN
 }
 
+enum Level {
+  DEBUTANT
+  INTERMEDIAIRE
+  AVANCE
+}
+
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// ─────────────────────────────────────────────
+// Users
+// ─────────────────────────────────────────────
+
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
   passwordHash String
+  firstName    String?
+  lastName     String?
+  avatar       String?
   role         Role     @default(APPRENANT)
   /// Bcrypt hash of the current refresh token (null when logged out)
   refreshHash  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  // Relations
+  coursesCreated  Course[]          @relation("FormateurCourses")
+  enrollments     Enrollment[]
+  chapterProgress ChapterProgress[]
+  quizAttempts    QuizAttempt[]
+
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Courses
+// ─────────────────────────────────────────────
+
+model Course {
+  id          String       @id @default(uuid())
+  title       String
+  description String
+  thumbnail   String?
+  price       Float        @default(0)
+  level       Level        @default(DEBUTANT)
+  category    String?
+  status      CourseStatus @default(DRAFT)
+  formateurId String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  formateur   User         @relation("FormateurCourses", fields: [formateurId], references: [id])
+  chapters    Chapter[]
+  enrollments Enrollment[]
+
+  @@map("courses")
+}
+
+// ─────────────────────────────────────────────
+// Chapters
+// ─────────────────────────────────────────────
+
+model Chapter {
+  id          String   @id @default(uuid())
+  title       String
+  content     String?
+  videoUrl    String?
+  /// Duration in minutes
+  duration    Int?
+  /// Display order within the course (1-based)
+  order       Int
+  courseId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  course   Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  quiz     Quiz?
+  progress ChapterProgress[]
+
+  @@map("chapters")
+}
+
+// ─────────────────────────────────────────────
+// Quizzes
+// ─────────────────────────────────────────────
+
+model Quiz {
+  id        String   @id @default(uuid())
+  title     String
+  chapterId String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  chapter   Chapter        @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  questions QuizQuestion[]
+  attempts  QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model QuizQuestion {
+  id            String   @id @default(uuid())
+  question      String
+  /// JSON-encoded array of option strings
+  options       String[]
+  /// 0-based index of the correct option
+  correctAnswer Int
+  order         Int
+  quizId        String
+  createdAt     DateTime @default(now())
+
+  // Relations
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@map("quiz_questions")
+}
+
+// ─────────────────────────────────────────────
+// Progress & Enrollments
+// ─────────────────────────────────────────────
+
+model Enrollment {
+  id         String   @id @default(uuid())
+  userId     String
+  courseId   String
+  enrolledAt DateTime @default(now())
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id])
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+  @@map("enrollments")
+}
+
+/// Tracks which chapters an apprenant has completed
+model ChapterProgress {
+  id          String   @id @default(uuid())
+  userId      String
+  chapterId   String
+  completedAt DateTime @default(now())
+
+  // Relations
+  user    User    @relation(fields: [userId], references: [id])
+  chapter Chapter @relation(fields: [chapterId], references: [id])
+
+  @@unique([userId, chapterId])
+  @@map("chapter_progress")
+}
+
+/// Records each quiz attempt with score and chosen answers
+model QuizAttempt {
+  id          String   @id @default(uuid())
+  userId      String
+  quizId      String
+  /// Score as a percentage (0–100)
+  score       Float
+  /// Array of chosen answer indices (0-based), one per question
+  answers     Int[]
+  completedAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+  quiz Quiz @relation(fields: [quizId], references: [id])
+
+  @@map("quiz_attempts")
 }
