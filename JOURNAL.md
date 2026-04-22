@@ -2,6 +2,68 @@
 
 ---
 
+## 2026-04-22 — Ticket 21be4: "Front: Auth pages + routing"
+
+### Résumé
+
+Connexion des pages d'authentification à l'API réelle : remplacement des formulaires mock par une couche API typée, un contexte React gérant l'état d'authentification (avec refresh silencieux), et des composants UI réutilisables. Côté API, ajout du CORS et du `ValidationPipe` global.
+
+### Ce qui a été implémenté
+
+**Couche API (`apps/web/src/lib/api.ts`)**
+- Wrapper `request<T>` générique autour de `fetch` : gestion des codes d'erreur HTTP, extraction du message NestJS (`body.message`), support du statut 204
+- `authApi` exposant cinq endpoints typés : `signup`, `login`, `refresh`, `logout`, `resetPassword`
+
+**Gestion des tokens (`apps/web/src/lib/auth-storage.ts`)**
+- Helpers `localStorage` pour les tokens JWT (`sv_access_token` / `sv_refresh_token`)
+- Décodage JWT client-side sans dépendance externe (`decodeJwt` + `isTokenExpired`)
+
+**AuthContext (`apps/web/src/contexts/AuthContext.tsx`)**
+- `AuthProvider` wrappant toute l'application (enregistré dans `layout.tsx`)
+- Hydratation au montage : accès token valide → état user immédiat ; token expiré → refresh silencieux via `authApi.refresh` ; refresh impossible → tokens effacés
+- Actions exposées : `login`, `signup`, `logout` — chacune met à jour tokens et état user atomiquement
+- Hook `useAuth()` avec guard d'utilisation hors provider
+
+**Pages d'authentification**
+- `/auth/login` — validation inline (email + mot de passe requis, format email), redirection post-login selon le rôle (`FORMATEUR` → `/formateur`, autre → `/dashboard`), bouton Google SSO désactivé (placeholder "bientôt disponible")
+- `/auth/signup` — validation (email, mot de passe ≥ 8 caractères, confirmation), sélecteur de rôle visuel (cartes radio Apprenant / Formateur), case CGU obligatoire avant soumission
+- `/auth/reset-password` — envoi de l'email de réinitialisation via `authApi.resetPassword`, affichage d'un état de succès (remplacement du formulaire) après soumission
+
+**Composants UI (`apps/web/src/components/ui/`)**
+- `<Button>` — `forwardRef`, variantes `primary` / `secondary`, prop `loading` avec spinner SVG animé, `fullWidth` par défaut
+- `<Input>` — `forwardRef`, `label` associé par `htmlFor`, état d'erreur (bordure rouge + message), attributs ARIA (`aria-invalid`, `aria-describedby`)
+
+**API NestJS (`apps/api/src/main.ts`)**
+- CORS activé avec `origin` configurable via `FRONTEND_URL` (défaut `http://localhost:3001`) et `credentials: true`
+- `ValidationPipe` global : `whitelist: true`, `forbidNonWhitelisted: true`, `transform: true`
+
+### Alignement design
+
+Aucune maquette spécifique fournie pour ce ticket (DESIGN_SPECS.md vide). L'implémentation s'appuie sur les classes utilitaires Tailwind établies au ticket 334f8 (`card`, `btn-primary`, `btn-secondary`, `input`, palette `primary-*`), garantissant une cohérence visuelle avec les wireframes existants. Les formulaires suivent le même layout centré (max-w-md, fond `gray-50`) que les maquettes MVP.
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/web/src/lib/api.ts` | Client HTTP typé pour tous les endpoints auth |
+| `apps/web/src/lib/auth-storage.ts` | Helpers JWT / localStorage |
+| `apps/web/src/contexts/AuthContext.tsx` | État auth global + refresh silencieux |
+| `apps/web/src/app/layout.tsx` | Enregistrement de `AuthProvider` à la racine |
+| `apps/web/src/app/auth/login/page.tsx` | Page de connexion avec validation et redirection par rôle |
+| `apps/web/src/app/auth/signup/page.tsx` | Page d'inscription avec sélecteur de rôle visuel |
+| `apps/web/src/app/auth/reset-password/page.tsx` | Demande de réinitialisation avec état de succès |
+| `apps/web/src/components/ui/Button.tsx` | Composant bouton réutilisable (loading, variantes) |
+| `apps/web/src/components/ui/Input.tsx` | Composant champ de saisie (label, erreur, ARIA) |
+| `apps/api/src/main.ts` | CORS + ValidationPipe global |
+
+### Notes
+
+- Le refresh silencieux au montage évite toute déconnexion intempestive lors d'un rechargement de page après expiration du token d'accès.
+- Le décodage JWT est fait côté client sans librairie externe ; le payload n'est pas vérifié cryptographiquement (le serveur reste la source de vérité).
+- Le ticket suivant pourra s'appuyer sur `useAuth()` et `authApi` pour protéger les routes privées (middleware / guard côté Next.js).
+
+---
+
 ## 2026-04-22 — Ticket 9c6f4: "Setup repo + monorepo"
 
 ### Résumé
