@@ -1,0 +1,8 @@
+{
+  "name": "@scriptverse/prettier-config",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared Prettier configuration for ScriptVerse monorepo",
+  "main": "index.js",
+  "files": ["index.js"]
+}
