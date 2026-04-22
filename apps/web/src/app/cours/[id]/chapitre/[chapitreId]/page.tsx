@@ -10,12 +10,14 @@ export default function ChapterPage({ params }: Props) {
   const course = mockCourses.find((c) => c.id === params.id);
   if (!course) notFound();
 
-  const chapterIndex = course.chapters.findIndex((c) => c.id === params.chapitreId);
-  if (chapterIndex === -1) notFound();
+  // Flatten all lessons from all modules for navigation
+  const allLessons = course.modules.flatMap((m) => m.lessons);
+  const lessonIndex = allLessons.findIndex((l) => l.id === params.chapitreId);
+  if (lessonIndex === -1) notFound();
 
-  const chapter = course.chapters[chapterIndex];
-  const prevChapter = chapterIndex > 0 ? course.chapters[chapterIndex - 1] : null;
-  const nextChapter = chapterIndex < course.chapters.length - 1 ? course.chapters[chapterIndex + 1] : null;
+  const lesson = allLessons[lessonIndex];
+  const prevLesson = lessonIndex > 0 ? allLessons[lessonIndex - 1] : null;
+  const nextLesson = lessonIndex < allLessons.length - 1 ? allLessons[lessonIndex + 1] : null;
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
@@ -36,102 +38,114 @@ export default function ChapterPage({ params }: Props) {
         {/* Progress indicator */}
         <div className="hidden sm:flex items-center gap-2 text-xs text-gray-400">
           <span>
-            {chapterIndex + 1} / {course.chapters.length}
+            {lessonIndex + 1} / {allLessons.length}
           </span>
           <div className="w-24 h-1.5 rounded-full bg-gray-700">
             <div
               className="h-1.5 rounded-full bg-primary-500 transition-all"
-              style={{ width: `${((chapterIndex + 1) / course.chapters.length) * 100}%` }}
+              style={{ width: `${((lessonIndex + 1) / allLessons.length) * 100}%` }}
             />
           </div>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Chapter sidebar */}
+        {/* Lesson sidebar */}
         <aside className="hidden lg:flex flex-col w-72 shrink-0 border-r border-gray-700 overflow-y-auto">
           <div className="p-4 border-b border-gray-700">
-            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Chapitres</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Programme</p>
           </div>
-          <ul className="divide-y divide-gray-800">
-            {course.chapters.map((ch, idx) => {
-              const isCurrent = ch.id === params.chapitreId;
-              return (
-                <li key={ch.id}>
-                  <Link
-                    href={`/cours/${course.id}/chapitre/${ch.id}`}
-                    className={`flex items-start gap-3 p-4 transition-colors ${
-                      isCurrent ? 'bg-gray-800' : 'hover:bg-gray-800/50'
-                    }`}
-                  >
-                    {/* Status icon */}
-                    <div
-                      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                        ch.completed
-                          ? 'bg-green-500 text-white'
-                          : isCurrent
-                          ? 'bg-primary-500 text-white'
-                          : 'bg-gray-700 text-gray-400'
-                      }`}
-                    >
-                      {ch.completed ? (
-                        <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                        </svg>
-                      ) : (
-                        idx + 1
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm leading-snug ${isCurrent ? 'text-white font-medium' : 'text-gray-400'}`}>
-                        {ch.title}
-                      </p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-gray-600">{ch.duration}min</span>
-                        {ch.quiz && <span className="text-xs text-primary-500">+ Quiz</span>}
-                      </div>
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          {course.modules.map((mod) => (
+            <div key={mod.id}>
+              <p className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-600 bg-gray-800/50">
+                {mod.title}
+              </p>
+              <ul className="divide-y divide-gray-800">
+                {mod.lessons.map((l, idx) => {
+                  const isCurrent = l.id === params.chapitreId;
+                  return (
+                    <li key={l.id}>
+                      <Link
+                        href={`/cours/${course.id}/chapitre/${l.id}`}
+                        className={`flex items-start gap-3 p-4 transition-colors ${
+                          isCurrent ? 'bg-gray-800' : 'hover:bg-gray-800/50'
+                        }`}
+                      >
+                        <div
+                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                            l.completed
+                              ? 'bg-green-500 text-white'
+                              : isCurrent
+                              ? 'bg-primary-500 text-white'
+                              : 'bg-gray-700 text-gray-400'
+                          }`}
+                        >
+                          {l.completed ? (
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                            </svg>
+                          ) : (
+                            idx + 1
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm leading-snug ${isCurrent ? 'text-white font-medium' : 'text-gray-400'}`}>
+                            {l.title}
+                          </p>
+                          <span className="text-xs text-gray-600 uppercase">{l.type}</span>
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </aside>
 
         {/* Main content */}
         <main className="flex-1 overflow-y-auto bg-gray-50">
           {/* Video player */}
           <div className="bg-black aspect-video w-full max-h-[60vh] flex items-center justify-center">
-            <div className="text-center space-y-3">
-              <div className="mx-auto h-16 w-16 rounded-full bg-white/10 flex items-center justify-center">
-                <svg className="h-8 w-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
-                </svg>
+            {lesson.url ? (
+              <iframe
+                src={lesson.url}
+                className="w-full h-full"
+                allow="autoplay; fullscreen"
+                title={lesson.title}
+              />
+            ) : (
+              <div className="text-center space-y-3">
+                <div className="mx-auto h-16 w-16 rounded-full bg-white/10 flex items-center justify-center">
+                  <svg className="h-8 w-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+                  </svg>
+                </div>
+                <p className="text-gray-500 text-sm">{lesson.title}</p>
+                <p className="text-gray-600 text-xs">Lecteur vidéo</p>
               </div>
-              <p className="text-gray-500 text-sm">{chapter.title}</p>
-              <p className="text-gray-600 text-xs">Lecteur vidéo · {chapter.duration}min</p>
-            </div>
+            )}
           </div>
 
-          {/* Chapter content */}
+          {/* Lesson content */}
           <div className="mx-auto max-w-3xl px-4 sm:px-8 py-8 space-y-6">
-            {/* Chapter header */}
+            {/* Lesson header */}
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-medium text-primary-600 mb-1">
-                  Chapitre {chapterIndex + 1} sur {course.chapters.length}
+                  Leçon {lessonIndex + 1} sur {allLessons.length}
                 </p>
-                <h1 className="text-2xl font-bold text-gray-900">{chapter.title}</h1>
+                <h1 className="text-2xl font-bold text-gray-900">{lesson.title}</h1>
               </div>
               {/* Mark complete button */}
               <button
                 className={`shrink-0 flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                  chapter.completed
+                  lesson.completed
                     ? 'bg-green-100 text-green-700 border border-green-200'
                     : 'btn-primary'
                 }`}
               >
-                {chapter.completed ? (
+                {lesson.completed ? (
                   <>
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
@@ -144,22 +158,11 @@ export default function ChapterPage({ params }: Props) {
               </button>
             </div>
 
-            {/* Markdown-like content */}
-            <div className="prose prose-sm max-w-none text-gray-700 leading-relaxed space-y-4">
-              {chapter.content ? (
-                <div className="whitespace-pre-line text-sm leading-relaxed">{chapter.content}</div>
-              ) : (
-                <div className="rounded-lg bg-gray-100 p-6 text-center text-gray-400 text-sm">
-                  Le contenu écrit de ce chapitre sera disponible après la vidéo.
-                </div>
-              )}
-            </div>
-
             {/* Resources */}
             <div className="card p-4">
-              <h3 className="font-semibold text-gray-900 text-sm mb-3">Ressources du chapitre</h3>
+              <h3 className="font-semibold text-gray-900 text-sm mb-3">Ressources de la leçon</h3>
               <ul className="space-y-2">
-                {['Slides du chapitre (PDF)', 'Code source — exercices', 'Liens utiles'].map((resource) => (
+                {['Slides (PDF)', 'Code source — exercices', 'Liens utiles'].map((resource) => (
                   <li key={resource}>
                     <a href="#" className="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700">
                       <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -172,45 +175,27 @@ export default function ChapterPage({ params }: Props) {
               </ul>
             </div>
 
-            {/* Quiz CTA */}
-            {chapter.quiz && (
-              <div className="rounded-xl border border-primary-200 bg-primary-50 p-5 flex items-center justify-between gap-4">
-                <div>
-                  <p className="font-semibold text-primary-900">Quiz disponible</p>
-                  <p className="text-sm text-primary-700 mt-0.5">
-                    {chapter.quiz.questions.length} questions · Testez vos connaissances
-                  </p>
-                </div>
-                <Link
-                  href={`/cours/${course.id}/quiz/${chapter.quiz.id}`}
-                  className="btn-primary shrink-0 whitespace-nowrap"
-                >
-                  Commencer le quiz
-                </Link>
-              </div>
-            )}
-
             {/* Navigation */}
             <div className="flex items-center justify-between pt-4 border-t border-gray-200">
-              {prevChapter ? (
+              {prevLesson ? (
                 <Link
-                  href={`/cours/${course.id}/chapitre/${prevChapter.id}`}
+                  href={`/cours/${course.id}/chapitre/${prevLesson.id}`}
                   className="btn-secondary flex items-center gap-2"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
                   </svg>
-                  Chapitre précédent
+                  Leçon précédente
                 </Link>
               ) : (
                 <div />
               )}
-              {nextChapter ? (
+              {nextLesson ? (
                 <Link
-                  href={`/cours/${course.id}/chapitre/${nextChapter.id}`}
+                  href={`/cours/${course.id}/chapitre/${nextLesson.id}`}
                   className="btn-primary flex items-center gap-2"
                 >
-                  Chapitre suivant
+                  Leçon suivante
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
                   </svg>

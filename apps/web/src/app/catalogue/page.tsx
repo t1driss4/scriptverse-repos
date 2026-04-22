@@ -2,7 +2,7 @@ import { Navbar } from '@/components/layout/navbar';
 import { CourseCard } from '@/components/course-card';
 import { mockCourses, CATEGORIES, LEVEL_LABELS } from '@/lib/mock-data';
 
-const PUBLISHED_COURSES = mockCourses.filter((c) => c.status === 'PUBLISHED');
+const PUBLISHED_COURSES = mockCourses.filter((c) => c.published);
 
 export default function CataloguePage() {
   return (

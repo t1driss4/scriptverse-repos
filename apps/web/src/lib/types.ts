@@ -1,6 +1,6 @@
 export type Role = 'APPRENANT' | 'FORMATEUR' | 'ADMIN';
 export type Level = 'DEBUTANT' | 'INTERMEDIAIRE' | 'AVANCE';
-export type CourseStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+export type LessonType = 'VIDEO';
 
 export interface User {
   id: string;
@@ -9,6 +9,47 @@ export interface User {
   lastName: string;
   role: Role;
   avatar?: string;
+}
+
+export interface Lesson {
+  id: string;
+  title: string;
+  type: LessonType;
+  url?: string;
+  order: number;
+  moduleId: string;
+  /** UI-only: whether the learner has completed this lesson */
+  completed?: boolean;
+}
+
+export interface CourseModule {
+  id: string;
+  title: string;
+  order: number;
+  courseId: string;
+  lessons: Lesson[];
+}
+
+export interface Course {
+  id: string;
+  title: string;
+  description: string;
+  thumbnail?: string;
+  price: number;
+  level: Level;
+  category?: string;
+  published: boolean;
+  formateurId: string;
+  formateur?: Pick<User, 'id' | 'firstName' | 'lastName'>;
+  modules: CourseModule[];
+  _count?: { enrollments: number; modules: number };
+}
+
+export interface Enrollment {
+  courseId: string;
+  course: Course;
+  progress: number;
+  completedModules: string[];
 }
 
 export interface QuizQuestion {
@@ -23,41 +64,6 @@ export interface Quiz {
   id: string;
   title: string;
   questions: QuizQuestion[];
-}
-
-export interface Chapter {
-  id: string;
-  title: string;
-  content?: string;
-  videoUrl?: string;
-  duration?: number;
-  order: number;
-  courseId: string;
-  quiz?: Quiz;
-  completed?: boolean;
-}
-
-export interface Course {
-  id: string;
-  title: string;
-  description: string;
-  thumbnail?: string;
-  price: number;
-  level: Level;
-  category: string;
-  status: CourseStatus;
-  formateur: User;
-  chapters: Chapter[];
-  studentsCount: number;
-  rating: number;
-  duration: number;
-}
-
-export interface Enrollment {
-  courseId: string;
-  course: Course;
-  progress: number;
-  completedChapters: string[];
 }
 
 export interface QuizAttempt {

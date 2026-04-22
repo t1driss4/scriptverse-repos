@@ -25,7 +25,7 @@ export default function DashboardPage() {
   const completedCourses = 0;
   const inProgressCourses = mockEnrollments.length;
   const totalChaptersCompleted = mockEnrollments.reduce(
-    (acc, e) => acc + e.completedChapters.length,
+    (acc, e) => acc + e.completedModules.length,
     0
   );
 
@@ -105,8 +105,9 @@ export default function DashboardPage() {
             </div>
 
             {mockEnrollments.map((enrollment) => {
-              const { course, progress, completedChapters } = enrollment;
-              const nextChapter = course.chapters.find((ch) => !completedChapters.includes(ch.id));
+              const { course, progress, completedModules } = enrollment;
+              const allLessons = course.modules.flatMap((m) => m.lessons);
+              const nextLesson = allLessons.find((l) => !completedModules.includes(l.id));
               return (
                 <div key={enrollment.courseId} className="card p-5 space-y-4">
                   <div className="flex items-start gap-4">
@@ -123,11 +124,13 @@ export default function DashboardPage() {
                       >
                         {course.title}
                       </Link>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {course.formateur.firstName} {course.formateur.lastName}
-                      </p>
+                      {course.formateur && (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {course.formateur.firstName} {course.formateur.lastName}
+                        </p>
+                      )}
                       <p className="text-xs text-gray-400 mt-0.5">
-                        {completedChapters.length} / {course.chapters.length} chapitres terminés
+                        {completedModules.length} / {allLessons.length} leçons terminées
                       </p>
                     </div>
                     <span className="shrink-0 text-sm font-bold text-primary-600">{progress}%</span>
@@ -143,16 +146,16 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  {/* Next chapter CTA */}
-                  {nextChapter && (
+                  {/* Next lesson CTA */}
+                  {nextLesson && (
                     <Link
-                      href={`/cours/${course.id}/chapitre/${nextChapter.id}`}
+                      href={`/cours/${course.id}/chapitre/${nextLesson.id}`}
                       className="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 font-medium"
                     >
                       <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
                       </svg>
-                      Reprendre — {nextChapter.title}
+                      Reprendre — {nextLesson.title}
                     </Link>
                   )}
                 </div>

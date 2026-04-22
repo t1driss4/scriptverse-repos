@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-04-22 — Ticket d8ca9: "Modèle Cours (Course/Module/Lesson) + endpoints CRUD (v1)"
+
+### Résumé
+
+Mise en place de la hiérarchie à trois niveaux **Course > Module > Lesson** : refonte du schéma Prisma (remplacement de `Chapter` par `Module`/`Lesson`, abandon de l'enum `CourseStatus` au profit d'un booléen `published`), création de trois modules NestJS CRUD avec contrôle d'accès par rôle, et alignement du client TypeScript frontend (types + API client) sur le nouveau contrat.
+
+### Ce qui a été implémenté
+
+**Schéma Prisma (`apps/api/prisma/schema.prisma`)**
+- Suppression de l'enum `CourseStatus` (`DRAFT` / `PUBLISHED` / `ARCHIVED`) → remplacement par `published Boolean @default(false)` directement sur `Course` (simplification : deux états suffisent pour la v1)
+- Ajout de l'enum `LessonType` (`VIDEO`) — extensible en v2 (PDF, QUIZ…)
+- Renommage de `Chapter` → `Module` (champs simplifiés : `id`, `title`, `order`, `courseId` — suppression de `content`, `videoUrl`, `duration` qui n'appartiennent pas au conteneur)
+- Nouveau modèle `Lesson` : `id`, `title`, `type LessonType`, `url?`, `order`, `moduleId` — unité de contenu réelle
+- Renommage de `ChapterProgress` → `ModuleProgress` (cohérence avec la nouvelle terminologie)
+- `Quiz` mis à jour pour référencer `moduleId` au lieu de `chapterId`
+- Nom de migration : `course_module_lesson_v1`
+
+**API NestJS — trois modules**
+- `CoursesModule` (`/courses`) — CRUD complet : `POST /courses` (FORMATEUR), `GET /courses` (public), `GET /courses/mine` (FORMATEUR), `GET /courses/:id`, `PATCH /courses/:id`, `DELETE /courses/:id`
+- `ModulesModule` (préfixe `''`) — routes nested + standalone : `POST/GET /courses/:courseId/modules`, `GET/PATCH/DELETE /modules/:id`
+- `LessonsModule` (préfixe `''`) — même pattern : `POST/GET /modules/:moduleId/lessons`, `GET/PATCH/DELETE /lessons/:id`
+- Les contrôleurs `ModulesController` et `LessonsController` utilisent un préfixe vide pour combiner les URL `/courses/:id/modules` (création/listage imbriqués) et `/modules/:id` (opérations standalone) dans un seul contrôleur, sans duplication de service
+- Vérification de propriété dans la couche service : comparaison `formateurId` avant toute mutation
+
+**Contrôle d'accès (`apps/api/src/auth/`)**
+- Nouveau décorateur `@Roles(...roles)` (`roles.decorator.ts`) — liste les rôles autorisés sur un handler
+- Nouveau `RolesGuard` (`roles.guard.ts`) — lit le claim `role` du JWT et le compare aux rôles déclarés ; combiné avec `JwtAccessGuard` sur toutes les routes d'écriture FORMATEUR
+- `app.module.ts` : imports de `CoursesModule`, `ModulesModule`, `LessonsModule`
+
+**Frontend — types TypeScript (`apps/web/src/lib/types.ts`)**
+- `CourseStatus` supprimé → `LessonType = 'VIDEO'`
+- `Chapter` → `CourseModule` (champs `title`, `order`, `courseId`, `lessons: Lesson[]`)
+- Nouveau type `Lesson` (id, title, type, url?, order, moduleId, completed?)
+- `Course` : `status` → `published: boolean`, `chapters` → `modules: CourseModule[]`, ajout de `_count`
+- `Enrollment` : `completedChapters` → `completedModules`
+
+**Frontend — client API (`apps/web/src/lib/api.ts`)**
+- Interfaces de payload : `CoursePayload`, `ModulePayload`, `LessonPayload`
+- Trois namespaces typés : `coursesApi`, `modulesApi`, `lessonsApi` — chacun expose `findAll/findOne/create/update/remove` (ou équivalents) avec authentification Bearer
+
+**Frontend — données mock et pages**
+- `mock-data.ts` migré vers la structure `CourseModule[]` + `Lesson[]`
+- Pages apprenant (`catalogue`, `cours/[id]`, `cours/[id]/chapitre/[chapitreId]`, `cours/[id]/quiz/[quizId]`, `dashboard`) et pages formateur (`formateur`, `formateur/cours/[id]`) mises à jour pour utiliser `modules`/`lessons` à la place de `chapters`
+- `CourseCard` adapté (`published` au lieu de `status`)
+
+### Alignement design
+
+Aucune maquette spécifique pour ce ticket. Les pages existantes du ticket 334f8 ont été mises à jour pour refléter la nouvelle hiérarchie sans modifier la structure visuelle : les listes de chapitres deviennent des listes de modules groupant des leçons. Le booléen `published` permet d'afficher le même badge "Publié / Brouillon" que les maquettes MVP sans enum à trois états.
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/api/prisma/schema.prisma` | Schéma v1 avec Module, Lesson, ModuleProgress |
+| `apps/api/src/courses/` | Module NestJS CRUD cours |
+| `apps/api/src/modules/` | Module NestJS CRUD modules |
+| `apps/api/src/lessons/` | Module NestJS CRUD leçons |
+| `apps/api/src/auth/decorators/roles.decorator.ts` | Décorateur `@Roles()` |
+| `apps/api/src/auth/guards/roles.guard.ts` | Guard de vérification de rôle JWT |
+| `apps/api/src/app.module.ts` | Import des trois nouveaux modules |
+| `apps/web/src/lib/types.ts` | Types TS alignés sur le contrat API v1 |
+| `apps/web/src/lib/api.ts` | Clients `coursesApi`, `modulesApi`, `lessonsApi` |
+| `apps/web/src/lib/mock-data.ts` | Données mock migrées vers Module/Lesson |
+
+### Notes
+
+- Les routes standalone (`/modules/:id`, `/lessons/:id`) évitent de forcer le client à connaître l'identifiant parent lors d'une mise à jour ou suppression isolée.
+- En v2 : ajouter la pagination sur `GET /courses`, le quiz par module (référence `moduleId` déjà en place), le suivi de progression via `ModuleProgress`, et brancher les pages frontend sur l'API réelle (remplacer les mocks).
+- Le `RolesGuard` est combinable avec n'importe quel autre guard JWT et pourra être étendu au rôle `ADMIN` sans modification structurelle.
+
+---
+
 ## 2026-04-22 — Ticket 21be4: "Front: Auth pages + routing"
 
 ### Résumé
