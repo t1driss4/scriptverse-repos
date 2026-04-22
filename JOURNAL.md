@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-04-22 — Ticket 9c6f4: "Setup repo + monorepo"
+
+### Résumé
+
+Restructuration complète du dépôt en monorepo pnpm workspaces, avec séparation claire entre le frontend (`apps/web`) et le backend (`apps/api`), ajout de packages partagés, et mise en place de l'outillage qualité (Husky, Commitlint, Prettier).
+
+### Ce qui a été implémenté
+
+**Structure monorepo**
+- Migration de la disposition à plat vers **pnpm workspaces** avec deux applications : `apps/web` (Next.js) et `apps/api` (NestJS)
+- Création de `pnpm-workspace.yaml` et mise à jour du `package.json` racine en conséquence
+- Suppression des anciens `package-lock.json` (racine et `frontend/`) et génération du `pnpm-lock.yaml` unifié
+- Déplacement du schéma Prisma vers `apps/api/prisma/schema.prisma`
+
+**Packages partagés**
+- `packages/tsconfig` — configurations TypeScript de base, NestJS et Next.js (`base.json`, `nestjs.json`, `nextjs.json`)
+- `packages/eslint-config` — règles ESLint mutualisées pour Next.js et NestJS
+- `packages/prettier-config` — configuration Prettier partagée entre les deux apps
+
+**Outillage qualité**
+- **Husky** + **Commitlint** : enforcement des Conventional Commits à chaque `git commit`, avec support du type `auto` (utilisé par les agents)
+- `.prettierrc.js` et `.prettierignore` ajoutés à la racine
+
+**Nettoyage et documentation**
+- `.gitignore` étendu : exclusion des artefacts de build `.next/` précédemment suivis (suppression de ~200 fichiers de cache webpack/static)
+- `.env.example` ajouté pour documenter les variables d'environnement requises
+- `README.md` entièrement réécrit avec instructions de setup, structure du monorepo et commandes utiles
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `pnpm-workspace.yaml` | Déclaration des workspaces pnpm |
+| `packages/tsconfig/` | Configs TypeScript partagées |
+| `packages/eslint-config/` | Règles ESLint mutualisées |
+| `packages/prettier-config/` | Config Prettier partagée |
+| `.commitlintrc.js` | Règles Commitlint (Conventional Commits + type `auto`) |
+| `.husky/commit-msg` | Hook git qui déclenche Commitlint |
+| `apps/api/prisma/schema.prisma` | Schéma Prisma déplacé dans l'app API |
+
+### Notes
+
+- Aucune logique métier modifiée : ce ticket est purement infrastructurel.
+- Le ticket suivant pourra s'appuyer sur la config partagée (`tsconfig`, `eslint-config`) pour unifier la qualité de code entre `apps/web` et `apps/api`.
+
+---
+
 ## 2026-04-21 — Ticket 334f8: "Maquettes rapides (MVP)"
 
 ### Résumé
