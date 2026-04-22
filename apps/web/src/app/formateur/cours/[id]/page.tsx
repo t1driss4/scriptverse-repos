@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { mockCourses } from '@/lib/mock-data';
-import type { Chapter } from '@/lib/types';
+import type { Lesson } from '@/lib/types';
 
 interface Props {
   params: { id: string };
@@ -24,12 +24,12 @@ const CATEGORIES_OPTIONS = [
   'Design',
 ];
 
-function ChapterRow({
-  chapter,
+function LessonRow({
+  lesson,
   index,
   onRemove,
 }: {
-  chapter: Chapter;
+  lesson: Lesson;
   index: number;
   onRemove: (id: string) => void;
 }) {
@@ -48,10 +48,10 @@ function ChapterRow({
         </div>
 
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-800 truncate">{chapter.title}</p>
+          <p className="text-sm font-medium text-gray-800 truncate">{lesson.title}</p>
           <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
-            {chapter.duration && <span>{chapter.duration}min</span>}
-            {chapter.quiz && <span className="text-primary-500">+ Quiz</span>}
+            <span className="uppercase">{lesson.type}</span>
+            {lesson.url && <span className="text-primary-500 truncate max-w-[120px]">{lesson.url}</span>}
           </div>
         </div>
 
@@ -71,7 +71,7 @@ function ChapterRow({
         </button>
 
         <button
-          onClick={() => onRemove(chapter.id)}
+          onClick={() => onRemove(lesson.id)}
           className="shrink-0 text-gray-300 hover:text-red-500 transition-colors p-1"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -84,32 +84,21 @@ function ChapterRow({
         <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-3">
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Titre du chapitre</label>
-              <input type="text" defaultValue={chapter.title} className="input text-sm" />
+              <label className="block text-xs font-medium text-gray-600 mb-1">Titre de la leçon</label>
+              <input type="text" defaultValue={lesson.title} className="input text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Durée (minutes)</label>
-              <input type="number" defaultValue={chapter.duration} min={1} className="input text-sm" />
+              <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
+              <select defaultValue={lesson.type} className="input text-sm">
+                <option value="VIDEO">Vidéo</option>
+              </select>
             </div>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">URL de la vidéo</label>
-            <input type="url" placeholder="https://..." defaultValue={chapter.videoUrl ?? ''} className="input text-sm" />
+            <input type="url" placeholder="https://..." defaultValue={lesson.url ?? ''} className="input text-sm" />
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Contenu écrit (Markdown)</label>
-            <textarea
-              rows={4}
-              defaultValue={chapter.content ?? ''}
-              placeholder="Rédigez le contenu textuel du chapitre en Markdown…"
-              className="input text-sm resize-none"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-              <input type="checkbox" defaultChecked={!!chapter.quiz} className="h-3.5 w-3.5 rounded" />
-              Ajouter un quiz à ce chapitre
-            </label>
+          <div className="flex justify-end">
             <button className="text-xs text-primary-600 hover:text-primary-700 font-medium">Sauvegarder</button>
           </div>
         </div>
@@ -122,22 +111,27 @@ export default function CourseEditorPage({ params }: Props) {
   const existingCourse = mockCourses.find((c) => c.id === params.id);
   const isNew = params.id === 'nouveau';
 
-  const [chapters, setChapters] = useState<Chapter[]>(existingCourse?.chapters ?? []);
+  // Flatten all lessons from existing course for editing
+  const initialLessons: Lesson[] = existingCourse
+    ? existingCourse.modules.flatMap((m) => m.lessons)
+    : [];
+
+  const [lessons, setLessons] = useState<Lesson[]>(initialLessons);
   const [saved, setSaved] = useState(false);
 
-  function removeChapter(id: string) {
-    setChapters((prev) => prev.filter((c) => c.id !== id));
+  function removeLesson(id: string) {
+    setLessons((prev) => prev.filter((l) => l.id !== id));
   }
 
-  function addChapter() {
-    const newChapter: Chapter = {
-      id: `ch-${Date.now()}`,
-      title: `Nouveau chapitre ${chapters.length + 1}`,
-      order: chapters.length + 1,
-      courseId: params.id,
-      duration: 30,
+  function addLesson() {
+    const newLesson: Lesson = {
+      id: `lesson-${Date.now()}`,
+      title: `Nouvelle leçon ${lessons.length + 1}`,
+      type: 'VIDEO',
+      order: lessons.length + 1,
+      moduleId: 'default',
     };
-    setChapters((prev) => [...prev, newChapter]);
+    setLessons((prev) => [...prev, newLesson]);
   }
 
   function handleSave() {
@@ -161,8 +155,8 @@ export default function CourseEditorPage({ params }: Props) {
               {isNew ? 'Nouveau cours' : existingCourse?.title ?? 'Éditer le cours'}
             </p>
             {!isNew && existingCourse && (
-              <span className={`badge ${existingCourse.status === 'PUBLISHED' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                {existingCourse.status === 'PUBLISHED' ? 'Publié' : 'Brouillon'}
+              <span className={`badge ${existingCourse.published ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                {existingCourse.published ? 'Publié' : 'Brouillon'}
               </span>
             )}
           </div>
@@ -184,7 +178,7 @@ export default function CourseEditorPage({ params }: Props) {
                 'Sauvegarder'
               )}
             </button>
-            {existingCourse?.status !== 'PUBLISHED' && (
+            {!existingCourse?.published && (
               <button className="bg-green-600 hover:bg-green-700 text-white rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors">
                 Publier
               </button>
@@ -265,36 +259,36 @@ export default function CourseEditorPage({ params }: Props) {
               </div>
             </div>
 
-            {/* Chapters */}
+            {/* Lessons */}
             <div className="card p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold text-gray-900">
-                  Chapitres{' '}
-                  <span className="text-sm font-normal text-gray-400">({chapters.length})</span>
+                  Leçons{' '}
+                  <span className="text-sm font-normal text-gray-400">({lessons.length})</span>
                 </h2>
-                <button onClick={addChapter} className="btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5">
+                <button onClick={addLesson} className="btn-secondary text-xs flex items-center gap-1.5 px-3 py-1.5">
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                   </svg>
-                  Ajouter un chapitre
+                  Ajouter une leçon
                 </button>
               </div>
 
-              {chapters.length === 0 ? (
+              {lessons.length === 0 ? (
                 <div className="rounded-lg border-2 border-dashed border-gray-200 p-8 text-center text-gray-400">
-                  <p className="text-sm mb-3">Aucun chapitre pour l&apos;instant.</p>
-                  <button onClick={addChapter} className="btn-primary text-xs">
-                    Créer le premier chapitre
+                  <p className="text-sm mb-3">Aucune leçon pour l&apos;instant.</p>
+                  <button onClick={addLesson} className="btn-primary text-xs">
+                    Créer la première leçon
                   </button>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {chapters.map((chapter, idx) => (
-                    <ChapterRow
-                      key={chapter.id}
-                      chapter={chapter}
+                  {lessons.map((lesson, idx) => (
+                    <LessonRow
+                      key={lesson.id}
+                      lesson={lesson}
                       index={idx}
-                      onRemove={removeChapter}
+                      onRemove={removeLesson}
                     />
                   ))}
                 </div>
@@ -304,7 +298,7 @@ export default function CourseEditorPage({ params }: Props) {
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
                 </svg>
-                Glissez-déposez les chapitres pour les réordonner
+                Glissez-déposez les leçons pour les réordonner
               </p>
             </div>
           </div>
@@ -320,8 +314,7 @@ export default function CourseEditorPage({ params }: Props) {
                   { label: 'Titre renseigné', done: true },
                   { label: 'Description complétée', done: true },
                   { label: 'Image de couverture', done: false },
-                  { label: 'Au moins 1 chapitre', done: chapters.length > 0 },
-                  { label: 'Quiz sur dernier chapitre', done: false },
+                  { label: 'Au moins 1 leçon', done: lessons.length > 0 },
                 ].map((check) => (
                   <div key={check.label} className="flex items-center gap-2 text-xs">
                     <div
@@ -341,7 +334,7 @@ export default function CourseEditorPage({ params }: Props) {
               </div>
 
               <button
-                disabled={chapters.length === 0}
+                disabled={lessons.length === 0}
                 className="btn-primary w-full text-sm disabled:opacity-40"
               >
                 Publier le cours
@@ -351,9 +344,6 @@ export default function CourseEditorPage({ params }: Props) {
             {/* Danger zone */}
             <div className="card p-5 space-y-3 border-red-100">
               <h3 className="font-semibold text-gray-900 text-sm">Zone dangereuse</h3>
-              <button className="w-full rounded-lg border border-orange-200 px-3 py-2 text-xs font-medium text-orange-600 hover:bg-orange-50 transition-colors">
-                Archiver ce cours
-              </button>
               <button className="w-full rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors">
                 Supprimer définitivement
               </button>

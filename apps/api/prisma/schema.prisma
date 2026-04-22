@@ -1,5 +1,5 @@
 // Prisma schema – ScriptVerse
-// Run: npx prisma migrate dev --name add_courses_and_progress
+// Run: npx prisma migrate dev --name course_module_lesson_v1
 
 generator client {
   provider = "prisma-client-js"
@@ -26,10 +26,8 @@ enum Level {
   AVANCE
 }
 
-enum CourseStatus {
-  DRAFT
-  PUBLISHED
-  ARCHIVED
+enum LessonType {
+  VIDEO
 }
 
 // ─────────────────────────────────────────────
@@ -50,10 +48,10 @@ model User {
   updatedAt    DateTime @updatedAt
 
   // Relations
-  coursesCreated  Course[]          @relation("FormateurCourses")
-  enrollments     Enrollment[]
-  chapterProgress ChapterProgress[]
-  quizAttempts    QuizAttempt[]
+  coursesCreated Course[]         @relation("FormateurCourses")
+  enrollments    Enrollment[]
+  moduleProgress ModuleProgress[]
+  quizAttempts   QuizAttempt[]
 
   @@map("users")
 }
@@ -63,49 +61,68 @@ model User {
 // ─────────────────────────────────────────────
 
 model Course {
-  id          String       @id @default(uuid())
+  id          String   @id @default(uuid())
   title       String
   description String
   thumbnail   String?
-  price       Float        @default(0)
-  level       Level        @default(DEBUTANT)
+  price       Float    @default(0)
+  level       Level    @default(DEBUTANT)
   category    String?
-  status      CourseStatus @default(DRAFT)
+  /// Whether the course is visible to learners
+  published   Boolean  @default(false)
   formateurId String
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // Relations
   formateur   User         @relation("FormateurCourses", fields: [formateurId], references: [id])
-  chapters    Chapter[]
+  modules     Module[]
   enrollments Enrollment[]
 
   @@map("courses")
 }
 
 // ─────────────────────────────────────────────
-// Chapters
+// Modules
 // ─────────────────────────────────────────────
 
-model Chapter {
-  id          String   @id @default(uuid())
-  title       String
-  content     String?
-  videoUrl    String?
-  /// Duration in minutes
-  duration    Int?
+model Module {
+  id        String   @id @default(uuid())
+  title     String
   /// Display order within the course (1-based)
-  order       Int
-  courseId    String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  order     Int
+  courseId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  course   Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  course   Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons  Lesson[]
   quiz     Quiz?
-  progress ChapterProgress[]
+  progress ModuleProgress[]
 
-  @@map("chapters")
+  @@map("modules")
+}
+
+// ─────────────────────────────────────────────
+// Lessons
+// ─────────────────────────────────────────────
+
+model Lesson {
+  id        String     @id @default(uuid())
+  title     String
+  type      LessonType @default(VIDEO)
+  url       String?
+  /// Display order within the module (1-based)
+  order     Int
+  moduleId  String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Relations
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@map("lessons")
 }
 
 // ─────────────────────────────────────────────
@@ -115,12 +132,12 @@ model Chapter {
 model Quiz {
   id        String   @id @default(uuid())
   title     String
-  chapterId String   @unique
+  moduleId  String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
-  chapter   Chapter        @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  module    Module         @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   questions QuizQuestion[]
   attempts  QuizAttempt[]
 
@@ -162,19 +179,19 @@ model Enrollment {
   @@map("enrollments")
 }
 
-/// Tracks which chapters an apprenant has completed
-model ChapterProgress {
+/// Tracks which modules an apprenant has completed
+model ModuleProgress {
   id          String   @id @default(uuid())
   userId      String
-  chapterId   String
+  moduleId    String
   completedAt DateTime @default(now())
 
   // Relations
-  user    User    @relation(fields: [userId], references: [id])
-  chapter Chapter @relation(fields: [chapterId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+  module Module @relation(fields: [moduleId], references: [id])
 
-  @@unique([userId, chapterId])
-  @@map("chapter_progress")
+  @@unique([userId, moduleId])
+  @@map("module_progress")
 }
 
 /// Records each quiz attempt with score and chosen answers

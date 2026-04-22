@@ -11,10 +11,8 @@ export default function CourseDetailPage({ params }: Props) {
   const course = mockCourses.find((c) => c.id === params.id);
   if (!course) notFound();
 
-  const totalMinutes = course.duration;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  const durationLabel = hours > 0 ? `${hours}h${minutes > 0 ? `${minutes}min` : ''}` : `${minutes}min`;
+  const allLessons = course.modules.flatMap((m) => m.lessons);
+  const totalLessons = allLessons.length;
   const isEnrolled = ['c1', 'c2'].includes(course.id);
 
   return (
@@ -46,53 +44,31 @@ export default function CourseDetailPage({ params }: Props) {
             <p className="text-gray-300 text-sm leading-relaxed">{course.description}</p>
 
             {/* Meta */}
-            <div className="flex flex-wrap items-center gap-4 text-sm">
-              {course.rating > 0 && (
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-amber-400">{course.rating}</span>
-                  <div className="flex">
-                    {[1, 2, 3, 4, 5].map((s) => (
-                      <svg
-                        key={s}
-                        className={`h-4 w-4 ${s <= Math.round(course.rating) ? 'text-amber-400' : 'text-gray-600'}`}
-                        fill="currentColor"
-                        viewBox="0 0 20 20"
-                      >
-                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                      </svg>
-                    ))}
-                  </div>
-                  <span className="text-gray-400">({course.studentsCount.toLocaleString('fr-FR')} avis)</span>
-                </div>
-              )}
-              <span className="text-gray-400">
-                Par{' '}
-                <span className="text-white font-medium">
-                  {course.formateur.firstName} {course.formateur.lastName}
+            {course.formateur && (
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <span className="text-gray-400">
+                  Par{' '}
+                  <span className="text-white font-medium">
+                    {course.formateur.firstName} {course.formateur.lastName}
+                  </span>
                 </span>
-              </span>
-            </div>
+              </div>
+            )}
 
             {/* Stats row */}
             <div className="flex flex-wrap gap-6 text-sm text-gray-300 pt-1">
               <div className="flex items-center gap-1.5">
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                </svg>
-                {durationLabel} de contenu
-              </div>
-              <div className="flex items-center gap-1.5">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
                 </svg>
-                {course.chapters.length} chapitres
+                {course.modules.length} module{course.modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
               </div>
-              {course.studentsCount > 0 && (
+              {(course._count?.enrollments ?? 0) > 0 && (
                 <div className="flex items-center gap-1.5">
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
                   </svg>
-                  {course.studentsCount.toLocaleString('fr-FR')} apprenants
+                  {course._count!.enrollments.toLocaleString('fr-FR')} apprenants
                 </div>
               )}
             </div>
@@ -131,63 +107,70 @@ export default function CourseDetailPage({ params }: Props) {
             <div className="card p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold text-gray-900 text-lg">Programme du cours</h2>
-                <span className="text-xs text-gray-500">{course.chapters.length} chapitres · {durationLabel}</span>
+                <span className="text-xs text-gray-500">
+                  {course.modules.length} module{course.modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
+                </span>
               </div>
-              <ul className="divide-y divide-gray-100">
-                {course.chapters.map((chapter, idx) => (
-                  <li key={chapter.id} className="flex items-center gap-4 py-3">
-                    {/* Icon */}
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-500">
-                      {idx + 1}
-                    </div>
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate">{chapter.title}</p>
-                      {chapter.quiz && (
-                        <span className="text-xs text-primary-600">+ Quiz disponible</span>
-                      )}
-                    </div>
-                    {/* Duration */}
-                    <span className="shrink-0 text-xs text-gray-400">{chapter.duration}min</span>
-                    {/* Lock / play */}
-                    {isEnrolled ? (
-                      <Link
-                        href={`/cours/${course.id}/chapitre/${chapter.id}`}
-                        className="shrink-0 text-primary-600 hover:text-primary-700"
-                      >
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
-                        </svg>
-                      </Link>
-                    ) : (
-                      <svg className="h-4 w-4 shrink-0 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
-                      </svg>
-                    )}
-                  </li>
+
+              <div className="space-y-4">
+                {course.modules.map((mod) => (
+                  <div key={mod.id}>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                      Module {mod.order} — {mod.title}
+                    </p>
+                    <ul className="divide-y divide-gray-100">
+                      {mod.lessons.map((lesson, idx) => (
+                        <li key={lesson.id} className="flex items-center gap-4 py-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-500">
+                            {idx + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-800 truncate">{lesson.title}</p>
+                          </div>
+                          <span className="shrink-0 text-xs text-gray-400 uppercase">{lesson.type}</span>
+                          {isEnrolled ? (
+                            <Link
+                              href={`/cours/${course.id}/chapitre/${lesson.id}`}
+                              className="shrink-0 text-primary-600 hover:text-primary-700"
+                            >
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+                              </svg>
+                            </Link>
+                          ) : (
+                            <svg className="h-4 w-4 shrink-0 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                            </svg>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
 
             {/* Instructor */}
-            <div className="card p-6">
-              <h2 className="font-semibold text-gray-900 text-lg mb-4">Votre formateur</h2>
-              <div className="flex items-start gap-4">
-                <div className="h-14 w-14 shrink-0 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-lg font-bold">
-                  {course.formateur.firstName[0]}
-                </div>
-                <div>
-                  <p className="font-semibold text-gray-900">
-                    {course.formateur.firstName} {course.formateur.lastName}
-                  </p>
-                  <p className="text-sm text-gray-500 mb-2">Formateur certifié · Développeur Senior</p>
-                  <p className="text-sm text-gray-600 leading-relaxed">
-                    Passionné par la transmission du savoir, {course.formateur.firstName} a plus de 10 ans d&apos;expérience
-                    dans l&apos;industrie et a formé plus de 5 000 apprenants sur ScriptVerse.
-                  </p>
+            {course.formateur && (
+              <div className="card p-6">
+                <h2 className="font-semibold text-gray-900 text-lg mb-4">Votre formateur</h2>
+                <div className="flex items-start gap-4">
+                  <div className="h-14 w-14 shrink-0 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-lg font-bold">
+                    {course.formateur.firstName[0]}
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      {course.formateur.firstName} {course.formateur.lastName}
+                    </p>
+                    <p className="text-sm text-gray-500 mb-2">Formateur certifié · Développeur Senior</p>
+                    <p className="text-sm text-gray-600 leading-relaxed">
+                      Passionné par la transmission du savoir, {course.formateur.firstName} a plus de 10 ans d&apos;expérience
+                      dans l&apos;industrie et a formé des milliers d&apos;apprenants sur ScriptVerse.
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* Sticky enroll card */}
@@ -214,9 +197,9 @@ export default function CourseDetailPage({ params }: Props) {
               </div>
 
               {/* CTA */}
-              {isEnrolled ? (
+              {isEnrolled && allLessons[0] ? (
                 <Link
-                  href={`/cours/${course.id}/chapitre/${course.chapters[0].id}`}
+                  href={`/cours/${course.id}/chapitre/${allLessons[0].id}`}
                   className="btn-primary w-full text-center block"
                 >
                   Continuer le cours

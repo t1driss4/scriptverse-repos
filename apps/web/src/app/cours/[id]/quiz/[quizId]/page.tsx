@@ -124,8 +124,10 @@ function QuizResults({
 
 export default function QuizPage({ params }: Props) {
   const course = mockCourses.find((c) => c.id === params.id);
-  const chapter = course?.chapters.find((ch) => ch.quiz?.id === params.quizId);
-  const quiz = chapter?.quiz;
+  // In v1, quizzes are attached to modules (not yet populated in mock data)
+  const allLessons = course?.modules.flatMap((m) => m.lessons) ?? [];
+  const chapter = allLessons[0];
+  const quiz = undefined as import('@/lib/types').Quiz | undefined;
 
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState<(number | null)[]>(
@@ -219,7 +221,7 @@ export default function QuizPage({ params }: Props) {
 
             {/* Options */}
             <ul className="space-y-3">
-              {question.options.map((option, idx) => {
+              {question.options.map((option: string, idx: number) => {
                 const isSelected = selectedAnswer === idx;
                 return (
                   <li key={idx}>
@@ -263,7 +265,7 @@ export default function QuizPage({ params }: Props) {
             </button>
 
             <div className="flex gap-1.5">
-              {quiz.questions.map((_, idx) => (
+              {quiz.questions.map((_: import('@/lib/types').QuizQuestion, idx: number) => (
                 <button
                   key={idx}
                   onClick={() => setCurrentQuestion(idx)}
