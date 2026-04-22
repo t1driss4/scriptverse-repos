@@ -1,39 +1,27 @@
 {
-  "name": "scriptverse-api",
-  "version": "0.1.0",
-  "description": "ScriptVerse REST API – Auth service",
+  "name": "scriptverse",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ScriptVerse – monorepo (apps/web + apps/api)",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/main",
-    "start:dev": "ts-node -r tsconfig-paths/register src/main.ts",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate:dev": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:studio": "prisma studio"
-  },
-  "dependencies": {
-    "@nestjs/common": "^10.3.0",
-    "@nestjs/core": "^10.3.0",
-    "@nestjs/jwt": "^10.2.0",
-    "@nestjs/passport": "^10.0.3",
-    "@nestjs/platform-express": "^10.3.0",
-    "@prisma/client": "^5.10.2",
-    "bcrypt": "^5.1.1",
-    "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.1",
-    "passport": "^0.7.0",
-    "passport-jwt": "^4.0.1",
-    "reflect-metadata": "^0.2.1",
-    "rxjs": "^7.8.1"
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "build": "pnpm --filter \"./apps/*\" build",
+    "lint": "pnpm --recursive lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore",
+    "type-check": "pnpm --recursive type-check",
+    "prepare": "husky"
   },
   "devDependencies": {
-    "@types/bcrypt": "^5.0.2",
-    "@types/express": "^4.17.21",
-    "@types/node": "^20.11.19",
-    "@types/passport-jwt": "^4.0.1",
-    "prisma": "^5.10.2",
-    "ts-node": "^10.9.2",
-    "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.3.3"
-  }
+    "@commitlint/cli": "^19.3.0",
+    "@commitlint/config-conventional": "^19.2.2",
+    "husky": "^9.0.11",
+    "prettier": "^3.3.2",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.4.0"
 }
