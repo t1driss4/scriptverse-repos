@@ -21,6 +21,25 @@ const config: Config = {
           900: '#312e81',
         },
       },
+      keyframes: {
+        shimmer: {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        'fade-in-up': {
+          '0%': { opacity: '0', transform: 'translateY(16px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        'fade-in': {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+      },
+      animation: {
+        shimmer: 'shimmer 1.6s linear infinite',
+        'fade-in-up': 'fade-in-up 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94) both',
+        'fade-in': 'fade-in 0.35s ease-out both',
+      },
     },
   },
   plugins: [],

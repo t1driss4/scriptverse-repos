@@ -1,1 +1,0 @@
-No visual design provided for this task.

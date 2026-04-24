@@ -12,7 +12,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "test": "jest"
   },
   "dependencies": {
     "@nestjs/common": "^10.3.0",
@@ -34,12 +35,15 @@
     "@scriptverse/tsconfig": "workspace:*",
     "@types/bcrypt": "^5.0.2",
     "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.14",
     "@types/node": "^20.11.19",
     "@types/passport-jwt": "^4.0.1",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",
+    "jest": "^29.7.0",
     "prisma": "^5.10.2",
+    "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.4.5"
