@@ -2,6 +2,118 @@
 
 ---
 
+## 2026-04-24 — Ticket 4594d: "Fix TS2564 sur DTO (email/password)"
+
+### Résumé
+
+Correction de l'erreur TypeScript **TS2564** (`Property has no initializer and is not definitely assigned in the constructor`) sur les trois DTO d'authentification. L'ajout de l'opérateur `!` (*definite assignment assertion*) aligne les classes DTO avec `strictPropertyInitialization: true` tout en conservant le comportement de validation `class-validator`. Le ticket inclut aussi la mise en place de la configuration Jest pour l'API et la rédaction de tests unitaires complets sur ces DTO. En marge, quelques primitives d'animation et un état de chargement squelette ont été ajoutés côté frontend.
+
+### Architecture
+
+**Cause racine de TS2564**
+
+Avec `strictPropertyInitialization` activé (hérité du `tsconfig` NestJS), TypeScript exige que chaque propriété de classe soit soit initialisée dans la déclaration, soit marquée comme optionnelle (`?`), soit déclarée avec l'assertion `!`. Les DTO de `class-validator` utilisent des décorateurs pour décrire la validation mais ne fournissent pas de valeur par défaut — le compilateur ne peut donc pas prouver l'initialisation, d'où TS2564.
+
+**Solution retenue : `!` (definite assignment assertion)**
+
+L'alternative `?: string` aurait rendu les champs optionnels au sens TypeScript, en contradiction avec les règles de validation (`@IsEmail()` / `@IsString()`) qui lèvent une erreur si le champ est absent. Le `!` indique au compilateur que la valeur sera fournie par le mécanisme de transformation (`plainToInstance`) sans assouplir le contrat métier.
+
+**Exécution des tests DTO**
+
+Le `ValidationPipe` de NestJS transforme les corps de requête à l'exécution ; les tests unitaires reproduisent ce pipeline manuellement avec `plainToInstance` (class-transformer) + `validate` (class-validator), ce qui permet de tester les règles sans démarrer le serveur NestJS. Le fichier `jest.config.ts` utilise `ts-jest` pour transpiler TypeScript à la volée.
+
+### Ce qui a été implémenté
+
+**Correction TS2564 — trois DTO (`apps/api/src/auth/dto/`)**
+
+| DTO | Propriétés corrigées |
+|---|---|
+| `LoginDto` | `email!: string`, `password!: string` |
+| `SignupDto` | `email!: string`, `password!: string` (`role?: Role` inchangé — déjà optionnel) |
+| `ResetPasswordDto` | `email!: string` |
+
+**Configuration Jest (`apps/api/jest.config.ts`)**
+- Preset `ts-jest`, environnement `node`
+- Alias `@/` → `<rootDir>/src/` (cohérence avec le `tsconfig` API)
+- Pattern de détection : `**/*.spec.ts`
+
+**Correctif `reflect-metadata` (`apps/api/src/main.ts`)**
+- Ajout de `import 'reflect-metadata'` en tête de fichier — requis pour que les décorateurs `class-transformer`/`class-validator` s'enregistrent correctement au démarrage
+
+**Tests unitaires DTO**
+
+*`login.dto.spec.ts`* — 7 cas :
+- Email valide → 0 erreur
+- Email non conforme → erreur `isEmail`
+- Email absent → erreur sur `email`
+- Mot de passe de 8 caractères exactement → valide
+- Mot de passe > 8 caractères → valide
+- Mot de passe < 8 caractères → erreur `minLength`
+- Mot de passe non-string → erreur `isString`
+- Mot de passe absent → erreur sur `password`
+
+*`signup.dto.spec.ts`* — 9 cas :
+- Paires email/password valides → 0 erreur
+- Email invalide → erreur `isEmail`
+- Email absent → erreur sur `email`
+- Mot de passe 8 caractères → valide
+- Mot de passe court → erreur `minLength`
+- Mot de passe non-string → erreur `isString`
+- Mot de passe absent → erreur sur `password`
+- `role` enum valide (tous les membres de `Role`) → valide
+- `role` invalide (`'SUPERADMIN'`) → erreur `isEnum`
+- `role` absent → valide (champ optionnel)
+
+*`reset-password.dto.spec.ts`* — 5 cas :
+- Email valide → 0 erreur
+- Email avec sous-domaine → valide
+- Email invalide → erreur `isEmail`
+- Email sans domaine (`user@`) → erreur `isEmail`
+- Email absent → erreur sur `email`
+
+**Animations frontend (`apps/web/src/components/animations/`)**
+- `FadeIn.tsx` — composant `framer-motion` avec direction configurable (`up`/`down`/`left`/`right`/`none`), délai et durée en props
+- `StaggerCards.tsx` + `StaggerItem` — container/enfant avec stagger de 70 ms entre cartes (curve ease cubique)
+
+**Squelette de chargement catalogue (`apps/web/src/app/catalogue/`)**
+- `loading.tsx` — page de chargement Next.js (Suspense streaming) : hero skeleton, sidebar à 9 placeholders, grille 2×3 de `SkeletonCard`
+- `SkeletonCard.tsx` — carte squelette reproduisant la structure de `CourseCard` (thumbnail + 5 lignes de texte + footer)
+
+### Statut des tests
+
+| Suite | Cas | Statut |
+|---|---|---|
+| `login.dto.spec.ts` | 8 | Écrits, non exécutés en CI |
+| `signup.dto.spec.ts` | 9 | Écrits, non exécutés en CI |
+| `reset-password.dto.spec.ts` | 5 | Écrits, non exécutés en CI |
+
+> La configuration Jest est en place (`ts-jest` + `reflect-metadata`). Les tests peuvent être lancés localement avec `pnpm --filter api test`. L'intégration CI reste à configurer (étape suivante).
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/api/src/auth/dto/login.dto.ts` | Fix `!` sur `email` et `password` |
+| `apps/api/src/auth/dto/signup.dto.ts` | Fix `!` sur `email` et `password` |
+| `apps/api/src/auth/dto/reset-password.dto.ts` | Fix `!` sur `email` |
+| `apps/api/jest.config.ts` | Configuration Jest avec `ts-jest` |
+| `apps/api/src/main.ts` | Ajout de `import 'reflect-metadata'` |
+| `apps/api/src/auth/dto/login.dto.spec.ts` | Tests unitaires `LoginDto` |
+| `apps/api/src/auth/dto/signup.dto.spec.ts` | Tests unitaires `SignupDto` |
+| `apps/api/src/auth/dto/reset-password.dto.spec.ts` | Tests unitaires `ResetPasswordDto` |
+| `apps/web/src/components/animations/FadeIn.tsx` | Composant animation fade directionnel |
+| `apps/web/src/components/animations/StaggerCards.tsx` | Composant animation stagger pour grilles |
+| `apps/web/src/components/ui/SkeletonCard.tsx` | Carte squelette pour le catalogue |
+| `apps/web/src/app/catalogue/loading.tsx` | État de chargement Next.js (Suspense) |
+
+### Notes
+
+- L'opérateur `!` est la correction minimale et sémantiquement correcte pour les DTO `class-validator` : ne pas utiliser `= ''` (valeur par défaut trompeuse) ni `?: string` (briserait la validation obligatoire).
+- `plainToInstance` dans les specs simule exactement ce que fait le `ValidationPipe` de NestJS (`transform: true`) — les tests sont donc fidèles au comportement en production.
+- En v2 : brancher les tests DTO sur la CI GitHub Actions (job `test:unit` dans `.github/workflows/`) ; envisager `class-transformer` strict mode pour les DTOs sensibles.
+
+---
+
 ## 2026-04-22 — Ticket d8ca9: "Modèle Cours (Course/Module/Lesson) + endpoints CRUD (v1)"
 
 ### Résumé

@@ -9,11 +9,11 @@ import { Role } from '@prisma/client';
 
 export class SignupDto {
   @IsEmail()
-  email: string;
+  email!: string;
 
   @IsString()
   @MinLength(8)
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsEnum(Role)
