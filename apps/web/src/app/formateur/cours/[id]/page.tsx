@@ -114,7 +114,7 @@ export default function CourseEditorPage({ params }: Props) {
 
   // Flatten all lessons from existing course for editing
   const initialLessons: Lesson[] = existingCourse
-    ? existingCourse.modules.flatMap((m) => m.lessons)
+    ? (existingCourse.modules ?? []).flatMap((m) => m.lessons)
     : [];
 
   const [lessons, setLessons] = useState<Lesson[]>(initialLessons);

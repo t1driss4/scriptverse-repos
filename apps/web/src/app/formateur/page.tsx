@@ -33,7 +33,7 @@ function CourseTableBody() {
       animate="visible"
     >
       {FORMATEUR_COURSES.map((course) => {
-        const totalLessons = course.modules.reduce((acc, m) => acc + m.lessons.length, 0);
+        const totalLessons = (course.modules ?? []).reduce((acc, m) => acc + m.lessons.length, 0);
         return (
           <motion.tr
             key={course.id}
@@ -62,7 +62,7 @@ function CourseTableBody() {
                 : '—'}
             </td>
             <td className="py-4 px-4 hidden lg:table-cell text-gray-600">
-              {course.modules.length} module{course.modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
+              {(course.modules ?? []).length} module{(course.modules ?? []).length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
             </td>
             <td className="py-4 px-4 text-right">
               <div className="flex items-center justify-end gap-2">

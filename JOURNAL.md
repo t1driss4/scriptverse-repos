@@ -2,6 +2,114 @@
 
 ---
 
+## 2026-04-27 — Ticket 42c4f: "Intégrer l'API au front (auth + catalogue + cours)"
+
+### Résumé
+
+Branchement du frontend sur l'API réelle pour les trois domaines prioritaires du MVP : catalogue, fiche cours, et inscriptions. Le catalogue passe en Server Component async (fetch + revalidate) avec un nouveau `CatalogueClient` pour la partie interactive (filtres, pagination, recherche). La fiche cours récupère le cours depuis l'API et délègue l'inscription à un composant `EnrollButton` alimenté par un hook `useEnrollment`. Côté API, un nouveau module `Enrollments` offre trois endpoints protégés par JWT. Un client HTTP de second niveau (`api-client.ts`) centralise le refresh automatique du token d'accès.
+
+### Architecture
+
+**Séparation Server Component / Client Component (catalogue)**
+
+La page catalogue est maintenant un Server Component async : elle exécute le `fetch` côté serveur avec `{ next: { revalidate: 60 } }` (ISR) et passe les cours au `CatalogueClient` via props. Tout le state interactif (query, filtres, pagination) reste dans le Client Component, sans waterfall réseau côté navigateur.
+
+**Client HTTP avec refresh automatique (`api-client.ts`)**
+
+`apiRequest<T>` est un wrapper `fetch` typé qui gère le cycle complet des tokens JWT :
+1. Tente la requête avec le token d'accès en cours
+2. Si 401, appelle `POST /auth/refresh` avec le refresh token, stocke les nouveaux tokens, et rejoue la requête une fois
+3. Si le refresh échoue, nettoie le localStorage et lève `AuthExpiredError`
+
+Ce client est distinct de `api.ts` (qui reste compatible avec les appels depuis les Server Components et les appels sans token) et est utilisé exclusivement pour les routes authentifiées du client.
+
+**Hook `useEnrollment`**
+
+Encapsule l'état d'inscription d'un apprenant pour un cours donné : vérifie au montage si l'utilisateur est inscrit (`enrollmentsApi.findOne`), expose `enroll()` qui appelle l'API puis re-fetch l'état, gère `AuthExpiredError` (redirection `/auth/login`) et `ApiError` avec messages explicites par code HTTP.
+
+**Module Enrollments (API)**
+
+Trois endpoints tous protégés par `JwtAccessGuard` :
+- `POST /enrollments` — inscription idempotente (`upsert`) ; vérifie l'existence du cours
+- `GET /enrollments/mine` — liste les inscriptions avec calcul de progression (modules complétés / total)
+- `GET /enrollments/mine/:courseId` — progression pour un cours précis
+
+Le calcul de progression est fait dans le service en combinant `Enrollment` + `ModuleProgress` sans jointure N+1 grâce à une requête `findMany` sur les `ModuleProgress` de l'utilisateur puis un `Set` pour le filtrage.
+
+### Ce qui a été implémenté
+
+**API NestJS — module Enrollments (`apps/api/src/enrollments/`)**
+
+| Fichier | Rôle |
+|---|---|
+| `enrollments.controller.ts` | Trois routes JWT-protégées (`POST /`, `GET /mine`, `GET /mine/:courseId`) |
+| `enrollments.service.ts` | Logique métier : upsert inscription, calcul de progression via `ModuleProgress` |
+| `dto/create-enrollment.dto.ts` | Validation `@IsUUID()` + `@IsNotEmpty()` sur `courseId` |
+| `enrollments.module.ts` | Module NestJS (import `PrismaModule`) |
+
+`app.module.ts` : import de `EnrollmentsModule` ajouté.
+
+**Frontend — couche API**
+
+- `api-client.ts` — `apiRequest<T>` avec refresh automatique, `ApiError` (status + message), `AuthExpiredError`
+- `api.ts` — les trois namespaces (`coursesApi`, `modulesApi`, `lessonsApi`) sont désormais pleinement typés (remplacement des `unknown` par les types métier) ; ajout du namespace `enrollmentsApi` (`enroll`, `findMine`, `findOne`)
+- `types.ts` — `modules` rendu optionnel sur `Course` (`modules?: CourseModule[]`) ; nouveau type `EnrollmentProgress` (`courseId`, `enrolledAt`, `progress`, `completedModules`)
+
+**Frontend — catalogue**
+
+- `catalogue/page.tsx` — converti en `async` Server Component ; `fetchCourses()` appelle `GET /courses` (ISR 60 s) et passe les données à `CatalogueClient`
+- `CatalogueClient.tsx` — extrait de l'ancienne page : state (query, category, levels, priceRange, page), filtrage client-side, pagination calculée, vide état de résultats
+
+**Frontend — fiche cours**
+
+- `cours/[id]/page.tsx` — converti en `async` Server Component ; `fetchCourse(id)` appelle `GET /courses/:id` (ISR 60 s) ; `modules` accédé via `?? []` pour gérer le champ optionnel ; bouton d'inscription remplacé par `<EnrollButton>`
+- `EnrollButton.tsx` — composant client : spinner pendant le chargement, lien "Continuer le cours" si inscrit avec `firstLessonId`, bouton "S'inscrire maintenant" sinon ; redirige vers `/auth/login` si non authentifié
+
+**Frontend — hook**
+
+- `hooks/use-enrollment.ts` — `useEnrollment(courseId)` : vérification au montage, `enroll()` avec gestion fine des erreurs (404 / 409 / 403), `AuthExpiredError` → redirection
+
+**Pages mises à jour pour `modules?: CourseModule[]`**
+
+`dashboard/page.tsx`, `formateur/page.tsx`, `formateur/cours/[id]/page.tsx` — accès à `course.modules` protégé par `?? []`.
+
+### Statut des tests
+
+| Suite | Cible | Statut |
+|---|---|---|
+| `CatalogueClient.test.tsx` | Filtres, pagination, état vide | Écrits, non exécutés en CI |
+| `EnrollButton.test.tsx` | État inscrit/non-inscrit, loading, redirect | Écrits, non exécutés en CI |
+| `use-enrollment.test.tsx` | Fetch au montage, enroll(), erreurs | Écrits, non exécutés en CI |
+| `api-client.test.ts` | Refresh automatique, AuthExpiredError, ApiError | Écrits, non exécutés en CI |
+| `api.test.ts` | Types de retour enrollmentsApi | Écrits, non exécutés en CI |
+| `auth-storage.test.ts` | Helpers localStorage | Écrits, non exécutés en CI |
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/api/src/enrollments/enrollments.controller.ts` | Endpoints POST + GET /enrollments |
+| `apps/api/src/enrollments/enrollments.service.ts` | Logique inscription + progression |
+| `apps/api/src/enrollments/dto/create-enrollment.dto.ts` | Validation courseId UUID |
+| `apps/api/src/app.module.ts` | Import EnrollmentsModule |
+| `apps/web/src/lib/api-client.ts` | Client HTTP avec refresh JWT automatique |
+| `apps/web/src/lib/api.ts` | Namespaces typés + enrollmentsApi |
+| `apps/web/src/lib/types.ts` | EnrollmentProgress + modules optionnel |
+| `apps/web/src/app/catalogue/page.tsx` | Server Component async (ISR) |
+| `apps/web/src/app/catalogue/CatalogueClient.tsx` | Filtres et pagination côté client |
+| `apps/web/src/app/cours/[id]/page.tsx` | Server Component async (ISR) + EnrollButton |
+| `apps/web/src/app/cours/[id]/EnrollButton.tsx` | Composant d'inscription avec états |
+| `apps/web/src/hooks/use-enrollment.ts` | Hook gestion de l'inscription |
+
+### Notes
+
+- Le split Server Component / `CatalogueClient` suit le pattern Next.js App Router recommandé : le serveur fait le fetch, le client gère l'interactivité ; aucune duplication d'état.
+- `apiRequest<T>` rejoue la requête une seule fois après refresh pour éviter les boucles infinies en cas de refresh token invalide.
+- L'inscription est idempotente côté API (upsert) ; le frontend gère explicitement le code 409 pour informer l'utilisateur plutôt que de le traiter comme une erreur fatale.
+- En v2 : brancher le dashboard apprenant sur `enrollmentsApi.findMine()` (actuellement encore sur mock-data) ; ajouter la progression de `ModuleProgress` depuis la page de lecteur de leçon.
+
+---
+
 ## 2026-04-27 — Ticket d78db: "Ajouter des animations aux pages (UI)"
 
 ### Résumé

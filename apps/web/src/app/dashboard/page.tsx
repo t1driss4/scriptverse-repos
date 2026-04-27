@@ -190,7 +190,7 @@ export default function DashboardPage() {
               <StaggerCards className="space-y-4">
                 {mockEnrollments.map((enrollment) => {
                   const { course, progress, completedModules } = enrollment;
-                  const allLessons = course.modules.flatMap((m) => m.lessons);
+                  const allLessons = (course.modules ?? []).flatMap((m) => m.lessons);
                   const nextLesson = allLessons.find((l) => !completedModules.includes(l.id));
                   return (
                     <StaggerItem key={enrollment.courseId}>

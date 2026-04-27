@@ -41,13 +41,20 @@ export interface Course {
   published: boolean;
   formateurId: string;
   formateur?: Pick<User, 'id' | 'firstName' | 'lastName'>;
-  modules: CourseModule[];
+  modules?: CourseModule[];
   _count?: { enrollments: number; modules: number };
 }
 
 export interface Enrollment {
   courseId: string;
   course: Course;
+  progress: number;
+  completedModules: string[];
+}
+
+export interface EnrollmentProgress {
+  courseId: string;
+  enrolledAt: string;
   progress: number;
   completedModules: string[];
 }

@@ -1,25 +1,40 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Navbar } from '@/components/layout/navbar';
-import { mockCourses, LEVEL_LABELS, LEVEL_COLORS } from '@/lib/mock-data';
+import { LEVEL_LABELS, LEVEL_COLORS } from '@/lib/mock-data';
 import {
   PageTransition,
   FadeIn,
   StaggerCards,
   StaggerItem,
 } from '@/components/animations';
+import type { Course } from '@/lib/types';
+import { EnrollButton } from './EnrollButton';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 interface Props {
   params: { id: string };
 }
 
-export default function CourseDetailPage({ params }: Props) {
-  const course = mockCourses.find((c) => c.id === params.id);
+async function fetchCourse(id: string): Promise<Course | null> {
+  try {
+    const res = await fetch(`${API_URL}/courses/${id}`, { next: { revalidate: 60 } });
+    if (!res.ok) return null;
+    return res.json() as Promise<Course>;
+  } catch {
+    return null;
+  }
+}
+
+export default async function CourseDetailPage({ params }: Props) {
+  const course = await fetchCourse(params.id);
   if (!course) notFound();
 
-  const allLessons = course.modules.flatMap((m) => m.lessons);
+  const modules = course.modules ?? [];
+  const allLessons = modules.flatMap((m) => m.lessons);
   const totalLessons = allLessons.length;
-  const isEnrolled = ['c1', 'c2'].includes(course.id);
+  const firstLessonId = allLessons[0]?.id;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -69,7 +84,7 @@ export default function CourseDetailPage({ params }: Props) {
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
                     </svg>
-                    {course.modules.length} module{course.modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
+                    {modules.length} module{modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
                   </div>
                   {(course._count?.enrollments ?? 0) > 0 && (
                     <div className="flex items-center gap-1.5">
@@ -117,12 +132,12 @@ export default function CourseDetailPage({ params }: Props) {
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="font-semibold text-gray-900 text-lg">Programme du cours</h2>
                   <span className="text-xs text-gray-500">
-                    {course.modules.length} module{course.modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
+                    {modules.length} module{modules.length !== 1 ? 's' : ''} · {totalLessons} leçon{totalLessons !== 1 ? 's' : ''}
                   </span>
                 </div>
 
                 <StaggerCards className="space-y-4">
-                  {course.modules.map((mod) => (
+                  {modules.map((mod) => (
                     <StaggerItem key={mod.id}>
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
@@ -138,20 +153,10 @@ export default function CourseDetailPage({ params }: Props) {
                                 <p className="text-sm font-medium text-gray-800 truncate">{lesson.title}</p>
                               </div>
                               <span className="shrink-0 text-xs text-gray-400 uppercase">{lesson.type}</span>
-                              {isEnrolled ? (
-                                <Link
-                                  href={`/cours/${course.id}/chapitre/${lesson.id}`}
-                                  className="shrink-0 text-primary-600 hover:text-primary-700"
-                                >
-                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
-                                  </svg>
-                                </Link>
-                              ) : (
-                                <svg className="h-4 w-4 shrink-0 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
-                                </svg>
-                              )}
+                              {/* Lock icon — enrollment check happens client-side via EnrollButton */}
+                              <svg className="h-4 w-4 shrink-0 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                              </svg>
                             </li>
                           ))}
                         </ul>
@@ -208,16 +213,7 @@ export default function CourseDetailPage({ params }: Props) {
                 </div>
 
                 {/* CTA */}
-                {isEnrolled && allLessons[0] ? (
-                  <Link
-                    href={`/cours/${course.id}/chapitre/${allLessons[0].id}`}
-                    className="btn-primary w-full text-center block"
-                  >
-                    Continuer le cours
-                  </Link>
-                ) : (
-                  <button className="btn-primary w-full">S&apos;inscrire maintenant</button>
-                )}
+                <EnrollButton courseId={course.id} firstLessonId={firstLessonId} />
                 <button className="btn-secondary w-full">Ajouter aux favoris</button>
 
                 {/* Guarantees */}

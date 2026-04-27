@@ -32,7 +32,7 @@ export default function ChapterPage({ params }: Props) {
   if (!course) notFound();
 
   // Flatten all lessons from all modules for navigation
-  const allLessons = course.modules.flatMap((m) => m.lessons);
+  const allLessons = (course.modules ?? []).flatMap((m) => m.lessons);
   const lessonIndex = allLessons.findIndex((l) => l.id === params.chapitreId);
   if (lessonIndex === -1) notFound();
 
@@ -77,7 +77,7 @@ export default function ChapterPage({ params }: Props) {
             <div className="p-4 border-b border-gray-700">
               <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Programme</p>
             </div>
-            {course.modules.map((mod) => (
+            {(course.modules ?? []).map((mod) => (
               <div key={mod.id}>
                 <p className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-600 bg-gray-800/50">
                   {mod.title}
