@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { ScaleIn, FadeIn } from '@/components/animations';
 
 type Role = 'APPRENANT' | 'FORMATEUR';
 
@@ -113,15 +114,20 @@ export default function SignupPage() {
               />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            Créer votre compte
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Rejoignez ScriptVerse et commencez à apprendre
-          </p>
+          <FadeIn direction="up" delay={0.1}>
+            <h1 className="text-2xl font-bold text-gray-900">
+              Créer votre compte
+            </h1>
+          </FadeIn>
+          <FadeIn direction="up" delay={0.15}>
+            <p className="mt-1 text-sm text-gray-500">
+              Rejoignez ScriptVerse et commencez à apprendre
+            </p>
+          </FadeIn>
         </div>
 
         {/* Card */}
+        <ScaleIn delay={0}>
         <form onSubmit={handleSubmit} noValidate>
           <div className="card p-8 space-y-5">
             {/* API error banner */}
@@ -267,13 +273,13 @@ export default function SignupPage() {
                 className="text-xs text-gray-500 leading-relaxed"
               >
                 J&apos;accepte les{' '}
-                <span className="text-primary-600 cursor-pointer hover:underline">
+                <Link href="/legal/terms" className="text-primary-600 hover:underline">
                   conditions d&apos;utilisation
-                </span>{' '}
+                </Link>{' '}
                 et la{' '}
-                <span className="text-primary-600 cursor-pointer hover:underline">
+                <Link href="/legal/privacy" className="text-primary-600 hover:underline">
                   politique de confidentialité
-                </span>
+                </Link>
               </label>
             </div>
 
@@ -282,6 +288,7 @@ export default function SignupPage() {
             </Button>
           </div>
         </form>
+        </ScaleIn>
 
         <p className="text-center text-sm text-gray-500">
           Déjà un compte ?{' '}

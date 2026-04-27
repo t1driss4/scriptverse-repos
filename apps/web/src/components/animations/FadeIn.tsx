@@ -1,6 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import type { ReactNode } from 'react';
 
 interface FadeInProps {
@@ -18,18 +18,26 @@ export function FadeIn({
   direction = 'up',
   className,
 }: FadeInProps) {
-  const initial = {
-    opacity: 0,
-    y: direction === 'up' ? 18 : direction === 'down' ? -18 : 0,
-    x: direction === 'left' ? 18 : direction === 'right' ? -18 : 0,
-  };
+  const shouldReduce = useReducedMotion();
+
+  const initial = shouldReduce
+    ? { opacity: 1, y: 0, x: 0 }
+    : {
+        opacity: 0,
+        y: direction === 'up' ? 18 : direction === 'down' ? -18 : 0,
+        x: direction === 'left' ? 18 : direction === 'right' ? -18 : 0,
+      };
 
   return (
     <motion.div
       className={className}
       initial={initial}
       animate={{ opacity: 1, y: 0, x: 0 }}
-      transition={{ duration, delay, ease: [0.25, 0.46, 0.45, 0.94] }}
+      transition={
+        shouldReduce
+          ? { duration: 0 }
+          : { duration, delay, ease: [0.25, 0.46, 0.45, 0.94] }
+      }
     >
       {children}
     </motion.div>

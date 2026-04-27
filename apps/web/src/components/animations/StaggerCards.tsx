@@ -1,6 +1,6 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import type { ReactNode } from 'react';
 
 const containerVariants = {
@@ -22,6 +22,11 @@ const itemVariants = {
   },
 };
 
+const itemVariantsReduced = {
+  hidden: { opacity: 1, y: 0 },
+  visible: { opacity: 1, y: 0 },
+};
+
 export function StaggerCards({
   children,
   className,
@@ -29,10 +34,12 @@ export function StaggerCards({
   children: ReactNode;
   className?: string;
 }) {
+  const shouldReduce = useReducedMotion();
+
   return (
     <motion.div
       variants={containerVariants}
-      initial="hidden"
+      initial={shouldReduce ? 'visible' : 'hidden'}
       animate="visible"
       className={className}
     >
@@ -48,8 +55,13 @@ export function StaggerItem({
   children: ReactNode;
   className?: string;
 }) {
+  const shouldReduce = useReducedMotion();
+
   return (
-    <motion.div variants={itemVariants} className={className}>
+    <motion.div
+      variants={shouldReduce ? itemVariantsReduced : itemVariants}
+      className={className}
+    >
       {children}
     </motion.div>
   );

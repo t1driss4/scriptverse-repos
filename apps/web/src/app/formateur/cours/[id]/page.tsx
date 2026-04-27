@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { mockCourses } from '@/lib/mock-data';
 import type { Lesson } from '@/lib/types';
+import { PageTransition, StaggerCards, StaggerItem } from '@/components/animations';
 
 interface Props {
   params: { id: string };
@@ -188,6 +189,7 @@ export default function CourseEditorPage({ params }: Props) {
       </header>
 
       {/* Main */}
+      <PageTransition>
       <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8">
         <div className="flex flex-col lg:flex-row gap-8">
           {/* Left — Course info */}
@@ -282,16 +284,17 @@ export default function CourseEditorPage({ params }: Props) {
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <StaggerCards className="space-y-2">
                   {lessons.map((lesson, idx) => (
-                    <LessonRow
-                      key={lesson.id}
-                      lesson={lesson}
-                      index={idx}
-                      onRemove={removeLesson}
-                    />
+                    <StaggerItem key={lesson.id}>
+                      <LessonRow
+                        lesson={lesson}
+                        index={idx}
+                        onRemove={removeLesson}
+                      />
+                    </StaggerItem>
                   ))}
-                </div>
+                </StaggerCards>
               )}
 
               <p className="text-xs text-gray-400 flex items-center gap-1">
@@ -351,6 +354,7 @@ export default function CourseEditorPage({ params }: Props) {
           </div>
         </div>
       </div>
+      </PageTransition>
     </div>
   );
 }

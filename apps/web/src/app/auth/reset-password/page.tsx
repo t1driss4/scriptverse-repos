@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { authApi } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { ScaleIn, FadeIn } from '@/components/animations';
 
 export default function ResetPasswordPage() {
   const [email, setEmail] = useState('');
@@ -62,17 +63,22 @@ export default function ResetPasswordPage() {
               />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            Réinitialisation du mot de passe
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Saisissez votre adresse email pour recevoir un lien de
-            réinitialisation
-          </p>
+          <FadeIn direction="up" delay={0.1}>
+            <h1 className="text-2xl font-bold text-gray-900">
+              Réinitialisation du mot de passe
+            </h1>
+          </FadeIn>
+          <FadeIn direction="up" delay={0.15}>
+            <p className="mt-1 text-sm text-gray-500">
+              Saisissez votre adresse email pour recevoir un lien de
+              réinitialisation
+            </p>
+          </FadeIn>
         </div>
 
         {submitted ? (
           /* Success state */
+          <ScaleIn delay={0}>
           <div className="card p-8 text-center space-y-4">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
               <svg
@@ -99,8 +105,10 @@ export default function ResetPasswordPage() {
               </p>
             </div>
           </div>
+          </ScaleIn>
         ) : (
           /* Form */
+          <ScaleIn delay={0}>
           <form onSubmit={handleSubmit} noValidate>
             <div className="card p-8 space-y-5">
               {apiError && (
@@ -125,6 +133,7 @@ export default function ResetPasswordPage() {
               </Button>
             </div>
           </form>
+          </ScaleIn>
         )}
 
         <p className="text-center text-sm text-gray-500">
