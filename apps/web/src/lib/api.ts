@@ -1,3 +1,6 @@
+import { apiRequest } from './api-client';
+import type { Course, CourseModule, Lesson, Enrollment, EnrollmentProgress } from './types';
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -103,40 +106,34 @@ export interface LessonPayload {
 // ─────────────────────────────────────────────
 
 export const coursesApi = {
-  /** List all published courses */
   findAll() {
-    return request<unknown[]>('/courses');
+    return request<Course[]>('/courses');
   },
 
-  /** List courses belonging to the authenticated formateur */
   findMine(token: string) {
-    return request<unknown[]>('/courses/mine', { headers: bearer(token) });
+    return request<Course[]>('/courses/mine', { headers: bearer(token) });
   },
 
-  /** Get a course with its modules and lessons */
   findOne(id: string) {
-    return request<unknown>(`/courses/${id}`);
+    return request<Course>(`/courses/${id}`);
   },
 
-  /** Create a new course */
   create(token: string, data: CoursePayload) {
-    return request<unknown>('/courses', {
+    return request<Course>('/courses', {
       method: 'POST',
       headers: bearer(token),
       body: JSON.stringify(data),
     });
   },
 
-  /** Update a course */
   update(token: string, id: string, data: Partial<CoursePayload>) {
-    return request<unknown>(`/courses/${id}`, {
+    return request<Course>(`/courses/${id}`, {
       method: 'PATCH',
       headers: bearer(token),
       body: JSON.stringify(data),
     });
   },
 
-  /** Delete a course */
   remove(token: string, id: string) {
     return request<void>(`/courses/${id}`, {
       method: 'DELETE',
@@ -150,35 +147,30 @@ export const coursesApi = {
 // ─────────────────────────────────────────────
 
 export const modulesApi = {
-  /** List all modules for a course */
   findByCourse(courseId: string) {
-    return request<unknown[]>(`/courses/${courseId}/modules`);
+    return request<CourseModule[]>(`/courses/${courseId}/modules`);
   },
 
-  /** Get a module with its lessons */
   findOne(id: string) {
-    return request<unknown>(`/modules/${id}`);
+    return request<CourseModule>(`/modules/${id}`);
   },
 
-  /** Create a module inside a course */
   create(token: string, courseId: string, data: ModulePayload) {
-    return request<unknown>(`/courses/${courseId}/modules`, {
+    return request<CourseModule>(`/courses/${courseId}/modules`, {
       method: 'POST',
       headers: bearer(token),
       body: JSON.stringify(data),
     });
   },
 
-  /** Update a module */
   update(token: string, id: string, data: Partial<ModulePayload>) {
-    return request<unknown>(`/modules/${id}`, {
+    return request<CourseModule>(`/modules/${id}`, {
       method: 'PATCH',
       headers: bearer(token),
       body: JSON.stringify(data),
     });
   },
 
-  /** Delete a module */
   remove(token: string, id: string) {
     return request<void>(`/modules/${id}`, {
       method: 'DELETE',
@@ -192,39 +184,55 @@ export const modulesApi = {
 // ─────────────────────────────────────────────
 
 export const lessonsApi = {
-  /** List all lessons for a module */
   findByModule(moduleId: string) {
-    return request<unknown[]>(`/modules/${moduleId}/lessons`);
+    return request<Lesson[]>(`/modules/${moduleId}/lessons`);
   },
 
-  /** Get a single lesson */
   findOne(id: string) {
-    return request<unknown>(`/lessons/${id}`);
+    return request<Lesson>(`/lessons/${id}`);
   },
 
-  /** Create a lesson inside a module */
   create(token: string, moduleId: string, data: LessonPayload) {
-    return request<unknown>(`/modules/${moduleId}/lessons`, {
+    return request<Lesson>(`/modules/${moduleId}/lessons`, {
       method: 'POST',
       headers: bearer(token),
       body: JSON.stringify(data),
     });
   },
 
-  /** Update a lesson */
   update(token: string, id: string, data: Partial<LessonPayload>) {
-    return request<unknown>(`/lessons/${id}`, {
+    return request<Lesson>(`/lessons/${id}`, {
       method: 'PATCH',
       headers: bearer(token),
       body: JSON.stringify(data),
     });
   },
 
-  /** Delete a lesson */
   remove(token: string, id: string) {
     return request<void>(`/lessons/${id}`, {
       method: 'DELETE',
       headers: bearer(token),
     });
+  },
+};
+
+// ─────────────────────────────────────────────
+// Enrollments API
+// ─────────────────────────────────────────────
+
+export const enrollmentsApi = {
+  enroll(courseId: string) {
+    return apiRequest<{ courseId: string; enrolledAt: string }>('/enrollments', {
+      method: 'POST',
+      body: JSON.stringify({ courseId }),
+    });
+  },
+
+  findMine() {
+    return apiRequest<Enrollment[]>('/enrollments/mine');
+  },
+
+  findOne(courseId: string) {
+    return apiRequest<EnrollmentProgress>(`/enrollments/mine/${courseId}`);
   },
 };

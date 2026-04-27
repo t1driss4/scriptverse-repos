@@ -126,7 +126,7 @@ function QuizResults({
 export default function QuizPage({ params }: Props) {
   const course = mockCourses.find((c) => c.id === params.id);
   // In v1, quizzes are attached to modules (not yet populated in mock data)
-  const allLessons = course?.modules.flatMap((m) => m.lessons) ?? [];
+  const allLessons = course?.modules?.flatMap((m) => m.lessons) ?? [];
   const chapter = allLessons[0];
   const quiz = undefined as import('@/lib/types').Quiz | undefined;
 

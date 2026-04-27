@@ -22,7 +22,8 @@ function getThumbnailGradient(courseId: string) {
 
 export function CourseCard({ course, progress }: CourseCardProps) {
   const gradient = getThumbnailGradient(course.id);
-  const totalLessons = course.modules.reduce((acc, m) => acc + m.lessons.length, 0);
+  const moduleCount = course.modules?.length ?? course._count?.modules ?? 0;
+  const totalLessons = course.modules?.reduce((acc, m) => acc + m.lessons.length, 0) ?? 0;
 
   return (
     <Link href={`/cours/${course.id}`} className="group block">
@@ -52,7 +53,7 @@ export function CourseCard({ course, progress }: CourseCardProps) {
                 <span>·</span>
               </>
             )}
-            <span>{course.modules.length} module{course.modules.length !== 1 ? 's' : ''}</span>
+            <span>{moduleCount} module{moduleCount !== 1 ? 's' : ''}</span>
             <span>·</span>
             <span>{totalLessons} leçon{totalLessons !== 1 ? 's' : ''}</span>
           </div>
