@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { ScaleIn, FadeIn } from '@/components/animations';
 
 interface FormErrors {
   email?: string;
@@ -90,15 +91,20 @@ export default function LoginPage() {
               />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            Connexion à ScriptVerse
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Accédez à vos cours et continuez votre apprentissage
-          </p>
+          <FadeIn direction="up" delay={0.1}>
+            <h1 className="text-2xl font-bold text-gray-900">
+              Connexion à ScriptVerse
+            </h1>
+          </FadeIn>
+          <FadeIn direction="up" delay={0.15}>
+            <p className="mt-1 text-sm text-gray-500">
+              Accédez à vos cours et continuez votre apprentissage
+            </p>
+          </FadeIn>
         </div>
 
         {/* Card */}
+        <ScaleIn delay={0}>
         <form onSubmit={handleSubmit} noValidate>
           <div className="card p-8 space-y-5">
             {/* API error banner */}
@@ -175,6 +181,7 @@ export default function LoginPage() {
             </button>
           </div>
         </form>
+        </ScaleIn>
 
         <p className="text-center text-sm text-gray-500">
           Pas encore de compte ?{' '}

@@ -2,6 +2,113 @@
 
 ---
 
+## 2026-04-27 — Ticket d78db: "Ajouter des animations aux pages (UI)"
+
+### Résumé
+
+Mise en place d'une bibliothèque d'animations `framer-motion` et intégration sur l'ensemble des pages du frontend. Quatre nouveaux composants d'animation ont été créés (`ScaleIn`, `AnimatedCounter`, `AnimatedProgress`, `PageTransition`) ; les deux existants (`FadeIn`, `StaggerCards`) ont été renforcés avec le support `prefers-reduced-motion`. Toutes les pages — auth, catalogue, cours, quiz, dashboard apprenant et formateur — ont été instrumentées. L'infrastructure de test frontend (Vitest + Testing Library) a été initialisée et sept suites de tests couvrent chaque composant d'animation.
+
+### Architecture
+
+**Principe d'accessibilité — `prefers-reduced-motion`**
+
+Chaque composant lit `useReducedMotion()` de framer-motion et court-circuite l'animation si le signal système est actif : `initial` est forcé à l'état final (opacité 1, position 0, échelle 1), `duration` est mis à zéro. Cela garantit que les pages restent utilisables pour les personnes sensibles aux mouvements sans aucune logique métier dans les pages elles-mêmes.
+
+**Barrel export (`index.ts`)**
+
+Les six composants sont réexportés depuis `apps/web/src/components/animations/index.ts`, ce qui unifie les imports dans toutes les pages (`import { FadeIn, StaggerCards, … } from '@/components/animations'`).
+
+**Infrastructure de test (Vitest)**
+
+Le projet web utilise désormais Vitest (via `@vitejs/plugin-react` + jsdom) au lieu de Jest, pour une meilleure compatibilité avec le toolchain Vite/Next.js. Les composants framer-motion sont mockés via `vi.mock` : `motion.div` expose ses props (`initial`, `animate`, `transition`) en attributs `data-*` lisibles par les assertions, `useReducedMotion` est contrôlé par un flag de test.
+
+### Ce qui a été implémenté
+
+**Nouveaux composants d'animation (`apps/web/src/components/animations/`)**
+
+| Composant | Effet | Props clés |
+|---|---|---|
+| `ScaleIn` | Fondu + zoom (0.95 → 1) | `delay`, `className` |
+| `AnimatedCounter` | Compte de 0 à `value` en 0.6 s | `value`, `suffix`, `className` |
+| `AnimatedProgress` | Barre de progression (0 % → `value` %) | `value`, `className` |
+| `PageTransition` | Glissement vertical léger (y: 12 → 0) | `className` |
+
+**Composants existants renforcés**
+
+- `FadeIn.tsx` — `useReducedMotion()` ajouté : si actif, `initial = { opacity:1, y:0, x:0 }` et `duration = 0` (aucun mouvement)
+- `StaggerCards.tsx` / `StaggerItem` — `itemVariantsReduced` (hidden = visible) injecté conditionnellement ; `initial` du container mis à `'visible'` si reduced
+
+**Instrumentation des pages**
+
+*Pages d'authentification (`/auth/login`, `/auth/signup`, `/auth/reset-password`)* :
+- `<ScaleIn>` enveloppe la carte de formulaire entière
+- `<FadeIn direction="up" delay={0.1}>` sur le titre `<h1>`
+- `<FadeIn direction="up" delay={0.15}>` sur le sous-titre
+
+*Catalogue (`/catalogue`)* :
+- `<PageTransition>` sur la page complète
+- `<FadeIn delay={0}>` sur le titre hero + compteur de cours
+- `<FadeIn delay={0.08}>` sur la barre de recherche
+- `<StaggerCards>` / `<StaggerItem>` sur la grille de `CourseCard`
+
+*Dashboard apprenant (`/dashboard`)* :
+- `<PageTransition>` + `<FadeIn>` sur l'en-tête
+- `<AnimatedCounter>` sur les KPI (cours suivis, modules complétés)
+- `<AnimatedProgress>` sur les barres de progression par cours
+- Composant `ActivityFeed` inline avec stagger `framer-motion` (70 ms entre items) et variante réduite
+
+*Pages formateur (`/formateur`, `/formateur/cours/[id]`)* :
+- `<AnimatedCounter>` sur les statistiques (revenus, inscriptions, cours actifs)
+- `<FadeIn>` et `<StaggerCards>` sur les listes de cours
+
+*Pages cours (`/cours/[id]`, `/cours/[id]/chapitre/[chapitreId]`, `/cours/[id]/quiz/[quizId]`)* :
+- `<PageTransition>` sur le contenu principal
+- `<FadeIn>` sur les titres et descriptions
+
+**Infrastructure de test**
+
+- `apps/web/vitest.config.ts` — preset `@vitejs/plugin-react`, environnement `jsdom`, setup file `src/test/setup.ts`
+- `src/test/setup.ts` — import `@testing-library/jest-dom` pour les matchers (`toBeInTheDocument`, `toHaveClass`, etc.)
+- `package.json` : scripts `test` (`vitest run`) et `test:watch` (`vitest`) ; devDependencies `vitest`, `@vitejs/plugin-react`, `@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event`, `jsdom`
+
+### Statut des tests
+
+| Suite | Cas | Statut |
+|---|---|---|
+| `FadeIn.test.tsx` | 10 (+ 2 reduced-motion) | Écrits, non exécutés en CI |
+| `StaggerCards.test.tsx` | — | Écrits, non exécutés en CI |
+| `ScaleIn.test.tsx` | — | Écrits, non exécutés en CI |
+| `AnimatedCounter.test.tsx` | — | Écrits, non exécutés en CI |
+| `AnimatedProgress.test.tsx` | — | Écrits, non exécutés en CI |
+| `PageTransition.test.tsx` | — | Écrits, non exécutés en CI |
+| `index.test.ts` | Vérification barrel export | Écrits, non exécutés en CI |
+
+> Lancement local : `pnpm --filter web test`. Intégration CI à configurer (étape suivante).
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/web/src/components/animations/ScaleIn.tsx` | Zoom + fondu entrant |
+| `apps/web/src/components/animations/AnimatedCounter.tsx` | Compteur animé (motionValue) |
+| `apps/web/src/components/animations/AnimatedProgress.tsx` | Barre de progression animée |
+| `apps/web/src/components/animations/PageTransition.tsx` | Transition de page (glissement) |
+| `apps/web/src/components/animations/FadeIn.tsx` | Fondu directionnel + reduced-motion |
+| `apps/web/src/components/animations/StaggerCards.tsx` | Stagger grille + reduced-motion |
+| `apps/web/src/components/animations/index.ts` | Barrel export des 6 composants |
+| `apps/web/src/components/animations/__tests__/` | 7 suites Vitest |
+| `apps/web/vitest.config.ts` | Configuration Vitest (jsdom + React) |
+| `apps/web/src/test/setup.ts` | Setup jest-dom pour Vitest |
+| `apps/web/package.json` | Scripts test + devDependencies Vitest/Testing Library |
+
+### Notes
+
+- Le pattern `data-*` dans les mocks framer-motion (exposer `initial`/`animate`/`transition` en attributs HTML) permet d'écrire des assertions précises sur les valeurs de configuration sans déclencher de vraies animations dans jsdom.
+- `AnimatedCounter` utilise `useMotionValueEvent` au lieu d'un `useEffect` sur la motion value transformée : évite un re-render inutile et garantit que `setDisplay` est appelé au bon moment dans le cycle React.
+- En v2 : brancher les tests sur la CI GitHub Actions (job `test:unit:web`) ; envisager des tests d'intégration Playwright pour vérifier le comportement visuel des animations clés.
+
+---
+
 ## 2026-04-24 — Ticket 4594d: "Fix TS2564 sur DTO (email/password)"
 
 ### Résumé

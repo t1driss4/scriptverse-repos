@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { mockCourses } from '@/lib/mock-data';
 import type { QuizQuestion } from '@/lib/types';
+import { ScaleIn, AnimatedProgress } from '@/components/animations';
 
 interface Props {
   params: { id: string; quizId: string };
@@ -195,9 +196,9 @@ export default function QuizPage({ params }: Props) {
           <div className="flex-1">
             <p className="text-xs text-gray-500 truncate">{quiz.title}</p>
             <div className="mt-1 h-1.5 w-full rounded-full bg-gray-100">
-              <div
-                className="h-1.5 rounded-full bg-primary-500 transition-all"
-                style={{ width: `${progress}%` }}
+              <AnimatedProgress
+                value={progress}
+                className="h-1.5 rounded-full bg-primary-500"
               />
             </div>
           </div>
@@ -210,7 +211,8 @@ export default function QuizPage({ params }: Props) {
       {/* Question */}
       <main className="flex-1 flex items-center justify-center px-4 py-10">
         <div className="w-full max-w-2xl space-y-6">
-          {/* Question card */}
+          {/* Question card — re-animates on each question via key */}
+          <ScaleIn key={currentQuestion}>
           <div className="card p-6 sm:p-8 space-y-6">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-primary-600 mb-2">
@@ -250,6 +252,7 @@ export default function QuizPage({ params }: Props) {
               })}
             </ul>
           </div>
+          </ScaleIn>
 
           {/* Navigation */}
           <div className="flex items-center justify-between">
