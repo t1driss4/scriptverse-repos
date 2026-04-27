@@ -74,8 +74,8 @@ describe('SignupDto', () => {
       expect(errors).toHaveLength(0);
     });
 
-    it('accepts all valid Role values', async () => {
-      for (const role of Object.values(Role)) {
+    it('accepts APPRENANT and FORMATEUR roles', async () => {
+      for (const role of [Role.APPRENANT, Role.FORMATEUR]) {
         const dto = build({ ...VALID_BASE, role });
         const errors = await validate(dto);
         const roleErrors = errors.filter((e) => e.property === 'role');
@@ -83,12 +83,20 @@ describe('SignupDto', () => {
       }
     });
 
+    it('rejects ADMIN role (cannot self-assign during signup)', async () => {
+      const dto = build({ ...VALID_BASE, role: Role.ADMIN });
+      const errors = await validate(dto);
+      const roleErrors = errors.filter((e) => e.property === 'role');
+      expect(roleErrors).toHaveLength(1);
+      expect(roleErrors[0].constraints).toHaveProperty('isIn');
+    });
+
     it('rejects an invalid role string', async () => {
       const dto = build({ ...VALID_BASE, role: 'SUPERADMIN' });
       const errors = await validate(dto);
       const roleErrors = errors.filter((e) => e.property === 'role');
       expect(roleErrors).toHaveLength(1);
-      expect(roleErrors[0].constraints).toHaveProperty('isEnum');
+      expect(roleErrors[0].constraints).toHaveProperty('isIn');
     });
 
     it('passes validation when role is omitted', async () => {

@@ -84,6 +84,15 @@ export class AuthService {
     });
   }
 
+  // ─── Me ──────────────────────────────────────────────────────────────────────
+
+  async getMe(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException();
+    const { passwordHash, refreshHash, ...profile } = user;
+    return profile;
+  }
+
   // ─── Reset password (stub) ───────────────────────────────────────────────────
 
   async resetPassword(email: string) {
