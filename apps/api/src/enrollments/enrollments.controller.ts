@@ -1,5 +1,8 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { EnrollmentsService } from './enrollments.service';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
@@ -10,6 +13,8 @@ export class EnrollmentsController {
   constructor(private readonly enrollmentsService: EnrollmentsService) {}
 
   @Post()
+  @UseGuards(RolesGuard)
+  @Roles(Role.APPRENANT)
   enroll(@GetUser('sub') userId: string, @Body() dto: CreateEnrollmentDto) {
     return this.enrollmentsService.enroll(userId, dto);
   }
