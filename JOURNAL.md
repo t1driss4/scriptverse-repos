@@ -2,6 +2,177 @@
 
 ---
 
+## 2026-04-28 — Ticket 72033: "API: détail cours (modules/chapitres) + accès (inscription)"
+
+### Résumé
+
+Implémentation de l'endpoint de détail cours enrichi (`GET /courses/:id`) et du nouvel endpoint de contenu réservé aux inscrits (`GET /courses/:id/content`). Le premier retourne la structure complète modules/leçons sans exposer les URLs vidéo ; le second valide l'inscription de l'utilisateur puis retourne les URLs, la progression par module et les données de quiz via une seule transaction Prisma. 29 tests unitaires ajoutés (service + contrôleur), zéro régression sur les 163 tests existants. La suite contrôleur a été complétée avec des assertions de métadonnées vérifiant les décorateurs `@Public()` et `@Roles()` au niveau réflexion, et les tests du handler `create` ont été ajoutés pour couvrir l'ensemble du contrôleur.
+
+### Architecture
+
+**Endpoints**
+
+| Méthode | Route | Auth | Comportement |
+|---------|-------|------|--------------|
+| `GET` | `/courses/:id` | Public (enrichi) | Prévisualisation : modules + leçons sans `url` |
+| `GET` | `/courses/:id/content` | Authentifié + inscrit | Contenu complet : URLs + progression + quiz |
+
+**Logique d'accès**
+
+- `GET /courses/:id` : retourne `404` si le cours n'existe pas **ou** n'est pas publié — évite de révéler l'existence de brouillons à des visiteurs anonymes.
+- `GET /courses/:id/content` : vérifie d'abord l'inscription via `enrollment.findUnique({ userId_courseId })` ; lance `ForbiddenException('Not enrolled in this course')` si absent. La vérification est au niveau service (pas guard) conformément au principe : les guards gèrent l'authentification, les règles métier restent dans les services.
+
+**Transaction `$transaction`**
+
+Après confirmation de l'inscription, les trois lectures (structure du cours, progression modules, tentatives quiz) sont groupées en un seul aller-retour DB :
+
+```typescript
+const [course, progressRecords, attempts] = await this.prisma.$transaction([
+  this.prisma.course.findUniqueOrThrow({ ... }),          // structure + leçons avec url
+  this.prisma.moduleProgress.findMany({ where: { userId, module: { courseId } } }),
+  this.prisma.quizAttempt.findMany({ orderBy: { completedAt: 'desc' } }),
+]);
+```
+
+**Invariants de sécurité**
+
+- `url` des leçons absent de `GET /courses/:id` (champ exclu du `select`, pas seulement `null`)
+- `correctAnswer` absent des questions de quiz dans `GET /courses/:id/content`
+- Pour les tentatives multiples, la plus récente est retournée (ordonnées desc, première occurrence par `quizId` conservée)
+
+**Fichiers créés/modifiés**
+
+```
+apps/api/src/courses/
+├── courses.controller.ts          # handler findContent + ParseUUIDPipe sur findOne
+├── courses.service.ts             # findOne enrichi + findContent
+├── courses.controller.spec.ts     # NOUVEAU — 4 tests contrôleur
+├── courses.service.spec.ts        # NOUVEAU — 19 tests service
+└── dto/
+    ├── course-detail.dto.ts       # NOUVEAU — interfaces CourseDetailDto / ModulePreviewDto / LessonPreviewDto
+    └── course-content.dto.ts      # NOUVEAU — interfaces CourseContentDto / ModuleContentDto / LessonContentDto / QuizContentDto
+```
+
+### Tests
+
+- 29 nouveaux tests (19 service + 10 contrôleur)
+  - 19 tests service : logique `findOne` (published/404), `findContent` (enrollment check, transaction, sécurité), invariants `correctAnswer`/`url` absents
+  - 10 tests contrôleur : délégation vers le service pour `findOne`, `findContent`, `findAll`, `findMine`, `create` ; assertions de métadonnées via `Reflect.getMetadata` — `@Public()` présent sur `findOne`/`findAll`, absent sur `findContent` ; `@Roles(FORMATEUR)` vérifié sur `findMine` et `create`
+- Total suite : **169 tests, 20 suites — tous verts** *(6 tests contrôleur supplémentaires non encore commis)*
+
+---
+
+## 2026-04-28 — Ticket 9f3a1: "DB: schéma initial + migrations (PostgreSQL + Prisma)"
+
+### Résumé
+
+Consolidation et finalisation de la couche persistance : schéma Prisma complet en 9 modèles couvrant les quatre domaines métier (utilisateurs, cours, progression, quiz), migration SQL initiale générée automatiquement, service Prisma avec gestion du cycle de vie NestJS, seed idempotent avec données de démonstration réalistes, et suites de tests unitaires couvrant le service, les enums et le script de seed.
+
+### Architecture
+
+**Domaines et relations**
+
+Le schéma organise les données en quatre domaines interconnectés :
+
+```
+User ──< Course (via FormateurCourses)
+User ──< Enrollment ──> Course
+User ──< ModuleProgress ──> Module
+User ──< QuizAttempt ──> Quiz
+
+Course ──< Module ──< Lesson
+           Module ──  Quiz ──< QuizQuestion
+```
+
+La cascade de suppression est configurée sur les relations parent→enfant structurelles (`Course → Module`, `Module → Lesson`, `Module → Quiz`, `Quiz → QuizQuestion`) ; les relations de progression (`Enrollment`, `ModuleProgress`, `QuizAttempt`) utilisent `RESTRICT` pour éviter la perte silencieuse de données.
+
+**Identifiants et conventions SQL**
+
+Tous les modèles utilisent des UUID v4 générés par Prisma (`@id @default(uuid())`). Les noms de tables et colonnes sont en `snake_case` via `@@map` et `@map` ; les noms de champs Prisma restent en `camelCase` côté applicatif.
+
+**`PrismaService` — cycle de vie NestJS**
+
+`PrismaService` étend `PrismaClient` et implémente `OnModuleInit` / `OnModuleDestroy` pour contrôler la connexion pool : `$connect()` à l'initialisation du module, `$disconnect()` à la destruction. Il est exposé comme module `@Global()` dans `PrismaModule` pour éviter de l'importer dans chaque module NestJS consommateur.
+
+**Seed idempotent**
+
+Le seed utilise exclusivement `upsert` (jamais `create`) avec des UUIDs fixes pour les entités de référence, garantissant la ré-exécution sans doublon. Les mots de passe sont lus depuis les variables d'environnement `SEED_*_PASSWORD` ; si absentes, des valeurs par défaut sécurisées pour le développement local sont utilisées en fallback.
+
+### Ce qui a été implémenté
+
+**Schéma Prisma (`apps/api/prisma/schema.prisma`)**
+
+9 modèles avec 3 enums :
+
+| Modèle | Table SQL | Rôle |
+|---|---|---|
+| `User` | `users` | Utilisateur (apprenant, formateur, admin) + `refreshHash` |
+| `Course` | `courses` | Cours publié ou brouillon, appartenant à un formateur |
+| `Module` | `modules` | Conteneur ordonné de leçons (`order` 1-based) |
+| `Lesson` | `lessons` | Unité de contenu (`type: VIDEO`, `url?`, `order` 1-based) |
+| `Quiz` | `quizzes` | Quiz lié à un module (relation `@unique`) |
+| `QuizQuestion` | `quiz_questions` | Question avec `options String[]` et `correctAnswer Int` (index 0-based) |
+| `Enrollment` | `enrollments` | Inscription apprenant ↔ cours (`@@unique([userId, courseId])`) |
+| `ModuleProgress` | `module_progress` | Complétion de module (`@@unique([userId, moduleId])`) |
+| `QuizAttempt` | `quiz_attempts` | Tentative de quiz avec `score Float` et `answers Int[]` |
+
+Enums : `Role` (APPRENANT / FORMATEUR / ADMIN), `Level` (DEBUTANT / INTERMEDIAIRE / AVANCE), `LessonType` (VIDEO).
+
+**Migration initiale (`apps/api/prisma/migrations/20240101000000_initial_schema/migration.sql`)**
+
+SQL généré par Prisma : 9 `CREATE TABLE`, 3 `CREATE TYPE` (enums PostgreSQL natifs), 4 index uniques (`users_email_key`, `quizzes_moduleId_key`, `enrollments_userId_courseId_key`, `module_progress_userId_moduleId_key`), 12 `ADD CONSTRAINT` de clé étrangère avec les politiques ON DELETE configurées par domaine.
+
+**`PrismaService` (`apps/api/src/prisma/prisma.service.ts`)**
+
+Wrapper NestJS sur `PrismaClient` avec hooks `onModuleInit` / `onModuleDestroy`. `PrismaModule` le déclare `@Global()` pour injection universelle.
+
+**Seed (`apps/api/prisma/seed.ts`)**
+
+Données créées par le seed :
+
+| Entité | Données |
+|---|---|
+| 3 utilisateurs | `admin@scriptverse.dev` (ADMIN), `formateur@scriptverse.dev` (FORMATEUR), `apprenant@scriptverse.dev` (APPRENANT) |
+| 1 cours | "Introduction à TypeScript" — published, gratuit, DEBUTANT, Programmation |
+| 2 modules | "Les fondamentaux" (order 1), "Interfaces et classes" (order 2) |
+| 4 leçons | 2 par module : Pourquoi TypeScript, Types primitifs, Déclarer une interface, Classes et héritage |
+| 1 quiz | "Quiz — Les fondamentaux" sur le module 1, avec 2 questions |
+| 1 inscription | `apprenant` inscrit au cours de démonstration |
+
+**`ARCH_SPECS.md`** — structure de dossiers mise à jour : `seed.ts` ajouté, annotation `@Global()` sur `prisma.module.ts`.
+
+### Statut des tests
+
+| Suite | Cas | Statut |
+|---|---|---|
+| `prisma.service.spec.ts` | 3 (is defined, connects on init, disconnects on destroy) | Écrits, non exécutés en CI |
+| `seed.spec.ts` | 11 happy path + 4 error path (env var manquante → exit 1 + disconnect) | Écrits, non exécutés en CI |
+| `schema.spec.ts` | 10 (valeurs de chaque enum : Role ×4, Level ×4, LessonType ×2) | Écrits, non exécutés en CI |
+
+> Lancement local : `pnpm --filter api test`. `seed.spec.ts` et `schema.spec.ts` sont en attente de commit.
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/api/prisma/schema.prisma` | Source de vérité — 9 modèles, 3 enums, relations, @@map |
+| `apps/api/prisma/migrations/20240101000000_initial_schema/migration.sql` | Migration SQL initiale (ne jamais éditer manuellement) |
+| `apps/api/prisma/seed.ts` | Seed idempotent via upsert (3 users, 1 cours, 2 modules, 4 leçons, 1 quiz) |
+| `apps/api/prisma/seed.spec.ts` | Tests du script de seed (mock PrismaClient + bcrypt) |
+| `apps/api/src/prisma/prisma.service.ts` | `PrismaClient` wrappé pour NestJS (lifecycle hooks) |
+| `apps/api/src/prisma/prisma.module.ts` | Module `@Global()` exportant `PrismaService` |
+| `apps/api/src/prisma/prisma.service.spec.ts` | Tests unitaires du cycle de vie PrismaService |
+| `apps/api/src/prisma/schema.spec.ts` | Validation des valeurs d'enum générées par Prisma |
+
+### Notes
+
+- Les UUIDs du seed sont fixés en dur pour garantir l'idempotence sur plusieurs exécutions ; ils ne doivent pas être modifiés sans mettre à jour les références croisées dans les tests.
+- `QuizQuestion.options` est `String[]` (tableau PostgreSQL natif) et `answers` dans `QuizAttempt` est `Int[]` — ces types de tableau ne nécessitent pas de table de jointure et restent suffisants pour la v1.
+- `Enrollment` et `ModuleProgress` utilisent `RESTRICT` (au lieu de `CASCADE`) sur les FK utilisateur/cours intentionnellement — la perte d'une inscription ou d'une progression lors d'une suppression serait silencieuse et difficile à déboguer.
+- En v2 : remplacer le champ unique `refreshHash` sur `User` par une table `RefreshToken` dédiée (multi-session / multi-appareil) ; ajouter `completedAt` sur `Enrollment` pour calculer la durée de formation ; étendre `LessonType` à `PDF`, `QUIZ`, `TEXT`.
+
+---
+
 ## 2026-04-28 — Ticket 32924: "Auth: refresh token + guards/roles (RBAC)"
 
 ### Résumé

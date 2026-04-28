@@ -393,13 +393,14 @@ The schema models a **learning platform** with the following core domains:
 apps/api/
 ├── prisma/
 │   ├── schema.prisma                   # Source of truth — models, enums, relations
+│   ├── seed.ts                         # Idempotent seed: 3 demo users, 1 course, 2 modules, 4 lessons, 1 quiz
 │   └── migrations/
 │       ├── migration_lock.toml         # Pins migration provider (postgresql)
-│       └── <timestamp>_<name>/
+│       └── <timestamp>_<name>/         # e.g. 20240101000000_initial_schema/
 │           └── migration.sql           # Auto-generated SQL (never edited by hand)
 └── src/
     └── prisma/
-        ├── prisma.module.ts            # Global NestJS module (exports PrismaService)
+        ├── prisma.module.ts            # @Global() NestJS module (exports PrismaService)
         └── prisma.service.ts           # PrismaClient lifecycle (onModuleInit / onModuleDestroy)
 ```
 
@@ -710,3 +711,344 @@ secrets manager in production.
 - **`@@unique([userId, moduleId])` on ModuleProgress** — progress tracking is idempotent; marking a module complete twice is a no-op.
 - **`Quiz.moduleId @unique`** — enforces the one-quiz-per-module constraint at the DB level.
 - **Cascade deletes** flow from Course → Module → Lesson / Quiz → QuizQuestion; Enrollment, ModuleProgress, and QuizAttempt are intentionally excluded to preserve historical data.
+
+---
+
+---
+
+## Feature: API — Course Detail (Modules/Lessons) + Access Control (Enrollment)
+
+---
+
+## 23. Overview
+
+This feature extends the courses API with two concerns:
+
+1. **Public course detail** — `GET /courses/:id` is enriched to return the full module/lesson
+   structure alongside course metadata (formateur info, enrolment count). Lesson `url` fields
+   are **never** exposed on this endpoint; the response is safe for anonymous visitors.
+
+2. **Enrollment-gated content** — `GET /courses/:id/content` is a new authenticated endpoint
+   that validates the requesting user's enrollment and returns full lesson URLs plus per-module
+   progress and quiz data. No schema changes are required; the existing `Enrollment`,
+   `ModuleProgress`, and `QuizAttempt` models already provide all necessary data.
+
+---
+
+## 24. New & Modified Endpoints
+
+| Method | Route                        | Auth                       | Purpose                                              |
+|--------|------------------------------|----------------------------|------------------------------------------------------|
+| `GET`  | `/courses/:id`               | Public (existing, enriched)| Course preview — modules/lessons without `url`       |
+| `GET`  | `/courses/:id/content`       | Authenticated + enrolled   | Full lesson content + user progress                  |
+| `POST` | `/enrollments`               | `APPRENANT` (existing)     | Enroll current user in a course                      |
+| `GET`  | `/enrollments/mine`          | Authenticated (existing)   | List all enrollments for current user                |
+| `GET`  | `/enrollments/mine/:courseId`| Authenticated (existing)   | Enrollment status + progress for one course          |
+
+`GET /courses/:id/content` is the only genuinely new endpoint.
+
+---
+
+## 25. Enriched Course Detail — Public Preview
+
+### Route
+
+```
+GET /courses/:id
+```
+
+`@Public()` — `JwtAccessGuard` skips JWT validation.
+
+### Prisma Query
+
+```typescript
+const course = await this.prisma.course.findUnique({
+  where: { id },
+  include: {
+    formateur: {
+      select: { id: true, firstName: true, lastName: true, avatar: true },
+    },
+    modules: {
+      orderBy: { order: 'asc' },
+      include: {
+        lessons: {
+          orderBy: { order: 'asc' },
+          select: { id: true, title: true, type: true, order: true },
+          // url intentionally excluded
+        },
+        quiz: { select: { id: true, title: true } },
+        _count: { select: { lessons: true } },
+      },
+    },
+    _count: { select: { enrollments: true } },
+  },
+});
+
+if (!course || !course.published) throw new NotFoundException();
+```
+
+Published-only rule: if `published === false` and the caller is not the course owner, return
+`404` (not `403`) to avoid leaking draft course existence to external consumers.
+
+### Response Shape (`CourseDetailDto`)
+
+```typescript
+interface LessonPreviewDto {
+  id:    string;
+  title: string;
+  type:  LessonType;
+  order: number;
+  // url is deliberately absent
+}
+
+interface ModulePreviewDto {
+  id:           string;
+  title:        string;
+  order:        number;
+  lessonsCount: number;
+  hasQuiz:      boolean;
+  lessons:      LessonPreviewDto[];
+}
+
+interface CourseDetailDto {
+  id:               string;
+  title:            string;
+  description:      string;
+  thumbnail:        string | null;
+  price:            number;
+  level:            Level;
+  category:         string | null;
+  published:        boolean;
+  enrollmentsCount: number;
+  formateur: {
+    id:        string;
+    firstName: string | null;
+    lastName:  string | null;
+    avatar:    string | null;
+  };
+  modules:   ModulePreviewDto[];
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+---
+
+## 26. Course Content — Enrollment-Gated
+
+### Route
+
+```
+GET /courses/:id/content
+```
+
+Protected by the global `JwtAccessGuard`. No `RolesGuard` is needed: any authenticated role
+(APPRENANT, FORMATEUR, ADMIN) can access content they are enrolled in.
+
+### Enrollment Check (service-level)
+
+The enrollment check is performed inside `CoursesService.findContent()`, not via a guard.
+Guards handle authentication; business-level access rules (ownership, enrollment) are enforced
+in the service to keep guards reusable and single-purpose.
+
+```typescript
+async findContent(courseId: string, userId: string): Promise<CourseContentDto> {
+  const enrollment = await this.prisma.enrollment.findUnique({
+    where: { userId_courseId: { userId, courseId } },
+  });
+
+  if (!enrollment) throw new ForbiddenException('Not enrolled in this course');
+
+  // full query follows
+}
+```
+
+`userId_courseId` is the Prisma-generated composite key name for
+`@@unique([userId, courseId])` on the `Enrollment` model.
+
+### Prisma Query (after enrollment confirmed)
+
+```typescript
+const [course, progressRecords, attempts] = await this.prisma.$transaction([
+  this.prisma.course.findUniqueOrThrow({
+    where: { id: courseId },
+    include: {
+      modules: {
+        orderBy: { order: 'asc' },
+        include: {
+          lessons: { orderBy: { order: 'asc' } },         // url now included
+          quiz: {
+            include: {
+              questions: {
+                orderBy: { order: 'asc' },
+                select: {
+                  id: true, question: true, options: true, order: true,
+                  // correctAnswer excluded — revealed only after quiz submission
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  }),
+  this.prisma.moduleProgress.findMany({
+    where: { userId, module: { courseId } },
+    select: { moduleId: true, completedAt: true },
+  }),
+  this.prisma.quizAttempt.findMany({
+    where: { userId, quiz: { module: { courseId } } },
+    orderBy: { completedAt: 'desc' },
+    select: { quizId: true, score: true, completedAt: true },
+  }),
+]);
+```
+
+The `$transaction([...])` batches all three reads into one round-trip.
+
+### Response Shape (`CourseContentDto`)
+
+```typescript
+interface LessonContentDto {
+  id:    string;
+  title: string;
+  type:  LessonType;
+  order: number;
+  url:   string | null;   // exposed only to enrolled users
+}
+
+interface QuizContentDto {
+  id:    string;
+  title: string;
+  questions: Array<{
+    id:       string;
+    question: string;
+    options:  string[];
+    order:    number;
+    // correctAnswer absent — returned only after quiz submission
+  }>;
+  latestAttempt: { score: number; completedAt: string } | null;
+}
+
+interface ModuleContentDto {
+  id:          string;
+  title:       string;
+  order:       number;
+  completedAt: string | null;   // from ModuleProgress; null if not yet completed
+  lessons:     LessonContentDto[];
+  quiz:        QuizContentDto | null;
+}
+
+interface CourseContentDto {
+  id:          string;
+  title:       string;
+  description: string;
+  thumbnail:   string | null;
+  level:       Level;
+  modules:     ModuleContentDto[];
+  enrollment: {
+    id:         string;
+    enrolledAt: string;
+  };
+}
+```
+
+---
+
+## 27. Folder Structure — New Files
+
+```
+apps/api/src/
+│
+└── courses/
+    ├── courses.controller.ts         # Add GET /:id/content handler
+    ├── courses.service.ts            # Add findOne() enrichment + findContent()
+    └── dto/
+        ├── create-course.dto.ts      # existing
+        ├── update-course.dto.ts      # existing
+        ├── course-detail.dto.ts      # NEW — CourseDetailDto (public preview shape)
+        └── course-content.dto.ts     # NEW — CourseContentDto (enrolled access shape)
+```
+
+No new NestJS modules are needed. Both endpoints live in the existing `CoursesModule`.
+`PrismaService` is already globally available.
+
+---
+
+## 28. Controller Wiring
+
+```typescript
+// courses.controller.ts (additions)
+
+@Get(':id')
+@Public()
+findOne(@Param('id', ParseUUIDPipe) id: string): Promise<CourseDetailDto> {
+  return this.coursesService.findOne(id);
+}
+
+@Get(':id/content')
+findContent(
+  @Param('id', ParseUUIDPipe) id: string,
+  @GetUser('sub') userId: string,
+): Promise<CourseContentDto> {
+  return this.coursesService.findContent(id, userId);
+}
+```
+
+`findContent` relies on the global `JwtAccessGuard` already registered in `AppModule`.
+No additional guard is needed at the handler level.
+
+---
+
+## 29. Prisma — No Schema Changes Required
+
+The existing schema already provides all necessary models and constraints:
+
+| Capability needed                           | Existing provision                                      |
+|---------------------------------------------|---------------------------------------------------------|
+| Enrollment check (userId + courseId)        | `@@unique([userId, courseId])` → `userId_courseId` key  |
+| Module progress per user                    | `ModuleProgress` with `@@unique([userId, moduleId])`    |
+| Quiz attempts per user                      | `QuizAttempt` linked to `userId` and `quizId`           |
+| Lesson URL access                           | `Lesson.url String?` — already in schema                |
+| Ordered modules and lessons                 | `Module.order Int`, `Lesson.order Int`                  |
+| Published-course gating                     | `Course.published Boolean @default(false)`              |
+
+**No migration is required for this feature.**
+
+---
+
+## 30. Updated RBAC Matrix (Addendum)
+
+Additions to the table in §9:
+
+| Route                          | Public? | RolesGuard | Required Role                        |
+|--------------------------------|---------|------------|--------------------------------------|
+| `GET  /courses/:id`            | ✓       | —          | public (enriched response)           |
+| `GET  /courses/:id/content`    | —       | —          | authenticated + enrolled (any role)  |
+
+---
+
+## 31. Error Handling
+
+| Condition                                      | HTTP Status | Message                          |
+|------------------------------------------------|-------------|----------------------------------|
+| Course not found or not published              | `404`       | (default NestJS NotFoundException)|
+| Authenticated but not enrolled                 | `403`       | `Not enrolled in this course`    |
+| Not authenticated on `GET /courses/:id/content`| `401`       | (JwtAccessGuard default)         |
+
+---
+
+## 32. Key Design Invariants
+
+- **`url` is never present in the public course detail response** — the field is absent from
+  `LessonPreviewDto`, not just null. This makes the intent explicit and prevents clients from
+  accidentally rendering a null URL as a broken link.
+- **`correctAnswer` is excluded from quiz content** — quiz questions served via
+  `GET /courses/:id/content` omit `correctAnswer` to prevent trivial spoofing. It is only
+  returned as part of quiz-submission feedback (future endpoint).
+- **Enrollment check is service-level, not guard-level** — guards are stateless auth
+  primitives; enrollment is a business rule that belongs in the service layer.
+- **Published-only access returns 404, not 403** — prevents draft course existence from
+  leaking to unauthenticated consumers.
+- **`$transaction` batches the three content reads** — course structure, module progress, and
+  quiz attempts are fetched in a single database round-trip.

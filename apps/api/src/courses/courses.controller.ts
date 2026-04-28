@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -46,11 +47,20 @@ export class CoursesController {
     return this.coursesService.findMine(userId);
   }
 
-  /** Get a single course with its modules and lessons */
+  /** Public course preview — modules and lessons without video URLs */
   @Public()
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.coursesService.findOne(id);
+  }
+
+  /** Enrollment-gated full content — lesson URLs + progress (authenticated) */
+  @Get(':id/content')
+  findContent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser('sub') userId: string,
+  ) {
+    return this.coursesService.findContent(id, userId);
   }
 
   /** Update a course (FORMATEUR + owner only) */
