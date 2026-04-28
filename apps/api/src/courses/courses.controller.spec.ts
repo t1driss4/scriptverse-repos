@@ -1,4 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Role } from '@prisma/client';
+import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
+import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { CoursesController } from './courses.controller';
 import { CoursesService } from './courses.service';
 
@@ -46,6 +49,11 @@ describe('CoursesController', () => {
       expect(service.findOne).toHaveBeenCalledWith(COURSE_ID);
       expect(result).toBe(expected);
     });
+
+    it('is marked @Public() — accessible without authentication', () => {
+      const isPublic = Reflect.getMetadata(IS_PUBLIC_KEY, controller.findOne);
+      expect(isPublic).toBe(true);
+    });
   });
 
   describe('findContent', () => {
@@ -57,6 +65,11 @@ describe('CoursesController', () => {
 
       expect(service.findContent).toHaveBeenCalledWith(COURSE_ID, USER_ID);
       expect(result).toBe(expected);
+    });
+
+    it('is NOT marked @Public() — requires JWT authentication', () => {
+      const isPublic = Reflect.getMetadata(IS_PUBLIC_KEY, controller.findContent);
+      expect(isPublic).toBeUndefined();
     });
   });
 
@@ -70,6 +83,11 @@ describe('CoursesController', () => {
       expect(service.findAll).toHaveBeenCalled();
       expect(result).toBe(expected);
     });
+
+    it('is marked @Public() — accessible without authentication', () => {
+      const isPublic = Reflect.getMetadata(IS_PUBLIC_KEY, controller.findAll);
+      expect(isPublic).toBe(true);
+    });
   });
 
   describe('findMine', () => {
@@ -81,6 +99,29 @@ describe('CoursesController', () => {
 
       expect(service.findMine).toHaveBeenCalledWith(USER_ID);
       expect(result).toBe(expected);
+    });
+
+    it('is restricted to FORMATEUR role', () => {
+      const roles = Reflect.getMetadata(ROLES_KEY, controller.findMine);
+      expect(roles).toEqual([Role.FORMATEUR]);
+    });
+  });
+
+  describe('create', () => {
+    it('delegates to coursesService.create with userId and dto', () => {
+      const dto = { title: 'New Course', description: 'Description' };
+      const expected = { id: 'new-id', ...dto };
+      service.create.mockReturnValue(expected);
+
+      const result = controller.create(USER_ID, dto as any);
+
+      expect(service.create).toHaveBeenCalledWith(USER_ID, dto);
+      expect(result).toBe(expected);
+    });
+
+    it('is restricted to FORMATEUR role', () => {
+      const roles = Reflect.getMetadata(ROLES_KEY, controller.create);
+      expect(roles).toEqual([Role.FORMATEUR]);
     });
   });
 });

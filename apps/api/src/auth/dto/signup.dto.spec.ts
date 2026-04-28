@@ -8,7 +8,7 @@ function build(plain: object): SignupDto {
   return plainToInstance(SignupDto, plain);
 }
 
-const VALID_BASE = { email: 'user@example.com', password: 'password123' };
+const VALID_BASE = { email: 'user@example.com', password: 'Password1!' };
 
 describe('SignupDto', () => {
   describe('email', () => {
@@ -36,18 +36,50 @@ describe('SignupDto', () => {
   });
 
   describe('password', () => {
-    it('accepts a password of exactly 8 characters', async () => {
-      const dto = build({ ...VALID_BASE, password: '12345678' });
+    it('accepts a password of exactly 8 characters with required complexity', async () => {
+      const dto = build({ ...VALID_BASE, password: 'Pass1!ab' });
       const errors = await validate(dto);
       expect(errors).toHaveLength(0);
     });
 
     it('rejects a password shorter than 8 characters', async () => {
-      const dto = build({ ...VALID_BASE, password: 'short' });
+      const dto = build({ ...VALID_BASE, password: 'P1!a' });
       const errors = await validate(dto);
       const pwErrors = errors.filter((e) => e.property === 'password');
       expect(pwErrors).toHaveLength(1);
       expect(pwErrors[0].constraints).toHaveProperty('minLength');
+    });
+
+    it('rejects a password without uppercase letter', async () => {
+      const dto = build({ ...VALID_BASE, password: 'password1!' });
+      const errors = await validate(dto);
+      const pwErrors = errors.filter((e) => e.property === 'password');
+      expect(pwErrors).toHaveLength(1);
+      expect(pwErrors[0].constraints).toHaveProperty('matches');
+    });
+
+    it('rejects a password without lowercase letter', async () => {
+      const dto = build({ ...VALID_BASE, password: 'PASSWORD1!' });
+      const errors = await validate(dto);
+      const pwErrors = errors.filter((e) => e.property === 'password');
+      expect(pwErrors).toHaveLength(1);
+      expect(pwErrors[0].constraints).toHaveProperty('matches');
+    });
+
+    it('rejects a password without a digit', async () => {
+      const dto = build({ ...VALID_BASE, password: 'Password!' });
+      const errors = await validate(dto);
+      const pwErrors = errors.filter((e) => e.property === 'password');
+      expect(pwErrors).toHaveLength(1);
+      expect(pwErrors[0].constraints).toHaveProperty('matches');
+    });
+
+    it('rejects a password without a special character', async () => {
+      const dto = build({ ...VALID_BASE, password: 'Password1' });
+      const errors = await validate(dto);
+      const pwErrors = errors.filter((e) => e.property === 'password');
+      expect(pwErrors).toHaveLength(1);
+      expect(pwErrors[0].constraints).toHaveProperty('matches');
     });
 
     it('rejects a non-string password', async () => {

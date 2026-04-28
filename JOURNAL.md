@@ -6,7 +6,7 @@
 
 ### Résumé
 
-Implémentation de l'endpoint de détail cours enrichi (`GET /courses/:id`) et du nouvel endpoint de contenu réservé aux inscrits (`GET /courses/:id/content`). Le premier retourne la structure complète modules/leçons sans exposer les URLs vidéo ; le second valide l'inscription de l'utilisateur puis retourne les URLs, la progression par module et les données de quiz via une seule transaction Prisma. 23 tests unitaires ajoutés (service + contrôleur), zéro régression sur les 163 tests existants.
+Implémentation de l'endpoint de détail cours enrichi (`GET /courses/:id`) et du nouvel endpoint de contenu réservé aux inscrits (`GET /courses/:id/content`). Le premier retourne la structure complète modules/leçons sans exposer les URLs vidéo ; le second valide l'inscription de l'utilisateur puis retourne les URLs, la progression par module et les données de quiz via une seule transaction Prisma. 29 tests unitaires ajoutés (service + contrôleur), zéro régression sur les 163 tests existants. La suite contrôleur a été complétée avec des assertions de métadonnées vérifiant les décorateurs `@Public()` et `@Roles()` au niveau réflexion, et les tests du handler `create` ont été ajoutés pour couvrir l'ensemble du contrôleur.
 
 ### Architecture
 
@@ -55,8 +55,10 @@ apps/api/src/courses/
 
 ### Tests
 
-- 23 nouveaux tests (19 service + 4 contrôleur)
-- Total suite : **163 tests, 20 suites — tous verts**
+- 29 nouveaux tests (19 service + 10 contrôleur)
+  - 19 tests service : logique `findOne` (published/404), `findContent` (enrollment check, transaction, sécurité), invariants `correctAnswer`/`url` absents
+  - 10 tests contrôleur : délégation vers le service pour `findOne`, `findContent`, `findAll`, `findMine`, `create` ; assertions de métadonnées via `Reflect.getMetadata` — `@Public()` présent sur `findOne`/`findAll`, absent sur `findContent` ; `@Roles(FORMATEUR)` vérifié sur `findMine` et `create`
+- Total suite : **169 tests, 20 suites — tous verts** *(6 tests contrôleur supplémentaires non encore commis)*
 
 ---
 
