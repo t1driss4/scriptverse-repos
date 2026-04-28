@@ -12,25 +12,21 @@ import {
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { JwtAccessGuard } from '../auth/guards/jwt-access.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ModulesService } from './modules.service';
 import { CreateModuleDto } from './dto/create-module.dto';
 import { UpdateModuleDto } from './dto/update-module.dto';
 
-/**
- * Uses an empty controller prefix so route paths are declared in full,
- * enabling both nested (/courses/:courseId/modules) and standalone
- * (/modules/:id) patterns in a single controller.
- */
+// Empty prefix: full paths declared inline to support nested + standalone patterns.
 @Controller('')
 export class ModulesController {
   constructor(private readonly modulesService: ModulesService) {}
 
   /** Create a module inside a course (FORMATEUR + course owner) */
   @Post('courses/:courseId/modules')
-  @UseGuards(JwtAccessGuard, RolesGuard)
+  @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   create(
     @Param('courseId') courseId: string,
@@ -41,12 +37,14 @@ export class ModulesController {
   }
 
   /** List all modules for a course */
+  @Public()
   @Get('courses/:courseId/modules')
   findByCourse(@Param('courseId') courseId: string) {
     return this.modulesService.findByCourse(courseId);
   }
 
   /** Get a single module with its lessons */
+  @Public()
   @Get('modules/:id')
   findOne(@Param('id') id: string) {
     return this.modulesService.findOne(id);
@@ -54,7 +52,7 @@ export class ModulesController {
 
   /** Update a module (FORMATEUR + course owner) */
   @Patch('modules/:id')
-  @UseGuards(JwtAccessGuard, RolesGuard)
+  @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   update(
     @Param('id') id: string,
@@ -66,7 +64,7 @@ export class ModulesController {
 
   /** Delete a module (FORMATEUR + course owner) */
   @Delete('modules/:id')
-  @UseGuards(JwtAccessGuard, RolesGuard)
+  @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id') id: string, @GetUser('sub') userId: string) {

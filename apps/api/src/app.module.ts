@@ -22,8 +22,8 @@ import { JwtAccessGuard } from './auth/guards/jwt-access.guard';
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   providers: [
-    { provide: APP_GUARD, useClass: JwtAccessGuard },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: JwtAccessGuard },
   ],
 })
 export class AppModule {}
