@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
@@ -18,6 +19,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CoursesService } from './courses.service';
 import { CreateCourseDto } from './dto/create-course.dto';
+import { CourseListQueryDto } from './dto/course-list-query.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
 
 @Controller('courses')
@@ -32,11 +34,11 @@ export class CoursesController {
     return this.coursesService.create(userId, dto);
   }
 
-  /** List all published courses (public) */
+  /** List published courses with search, filter, sort, and pagination (public) */
   @Public()
   @Get()
-  findAll() {
-    return this.coursesService.findAll();
+  findAll(@Query() query: CourseListQueryDto) {
+    return this.coursesService.findAll(query);
   }
 
   /** List courses belonging to the authenticated formateur */
@@ -68,7 +70,7 @@ export class CoursesController {
   @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @GetUser('sub') userId: string,
     @Body() dto: UpdateCourseDto,
   ) {
@@ -80,7 +82,7 @@ export class CoursesController {
   @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: string, @GetUser('sub') userId: string) {
+  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser('sub') userId: string) {
     return this.coursesService.remove(id, userId);
   }
 }

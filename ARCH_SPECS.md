@@ -1052,3 +1052,312 @@ Additions to the table in §9:
   leaking to unauthenticated consumers.
 - **`$transaction` batches the three content reads** — course structure, module progress, and
   quiz attempts are fetched in a single database round-trip.
+
+---
+
+---
+
+# Feature: API — Course Catalogue (listing + search/filter)
+
+---
+
+## 33. Overview
+
+Single public endpoint that returns paginated, filterable, searchable published courses.
+
+| Endpoint           | Auth     | Description                                  |
+|--------------------|----------|----------------------------------------------|
+| `GET /courses`     | Public   | List published courses with optional filters |
+
+**Filters supported:**
+
+| Parameter      | Type                                         | Description                                  |
+|----------------|----------------------------------------------|----------------------------------------------|
+| `search`       | `string`                                     | Case-insensitive ILIKE on `title + description` |
+| `level`        | `DEBUTANT \| INTERMEDIAIRE \| AVANCE`        | Exact match on `Course.level`               |
+| `category`     | `string`                                     | Exact match on `Course.category`            |
+| `minPrice`     | `number`                                     | `price >= minPrice`                         |
+| `maxPrice`     | `number`                                     | `price <= maxPrice`                         |
+| `formateurId`  | `UUID`                                       | Exact match on `Course.formateurId`         |
+| `page`         | `number` (default `1`)                       | Offset pagination page                      |
+| `limit`        | `number` (default `12`, max `50`)            | Items per page                              |
+| `sortBy`       | `createdAt \| price \| title` (default `createdAt`) | Sort field                        |
+| `sortOrder`    | `asc \| desc` (default `desc`)               | Sort direction                              |
+
+---
+
+## 34. Query Parameter DTO
+
+```typescript
+// apps/api/src/courses/dto/course-list-query.dto.ts
+
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { Level } from '@prisma/client';
+
+export type CourseSortField = 'createdAt' | 'price' | 'title';
+
+export class CourseListQueryDto {
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsEnum(Level)
+  level?: Level;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  minPrice?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  maxPrice?: number;
+
+  @IsOptional()
+  @IsUUID()
+  formateurId?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit?: number = 12;
+
+  @IsOptional()
+  @IsEnum(['createdAt', 'price', 'title'])
+  sortBy?: CourseSortField = 'createdAt';
+
+  @IsOptional()
+  @IsEnum(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc' = 'desc';
+}
+```
+
+---
+
+## 35. Response Shape
+
+```typescript
+// apps/api/src/courses/dto/course-list.dto.ts
+
+interface FormateurPreviewDto {
+  id:        string;
+  firstName: string | null;
+  lastName:  string | null;
+  avatar:    string | null;
+}
+
+interface CoursePreviewDto {
+  id:              string;
+  title:           string;
+  description:     string;
+  thumbnail:       string | null;
+  price:           number;
+  level:           Level;
+  category:        string | null;
+  formateur:       FormateurPreviewDto;
+  enrollmentCount: number;   // _count.enrollments
+  moduleCount:     number;   // _count.modules
+  createdAt:       string;   // ISO 8601
+}
+
+interface PaginationMeta {
+  total:      number;
+  page:       number;
+  limit:      number;
+  totalPages: number;
+}
+
+interface CourseListDto {
+  data: CoursePreviewDto[];
+  meta: PaginationMeta;
+}
+```
+
+`enrollmentCount` and `moduleCount` are derived from Prisma's `_count` relation —
+no extra queries.
+
+---
+
+## 36. Prisma Query Strategy
+
+```typescript
+// apps/api/src/courses/courses.service.ts — findAll()
+
+const where: Prisma.CourseWhereInput = {
+  published: true,
+  ...(query.level      && { level: query.level }),
+  ...(query.category   && { category: query.category }),
+  ...(query.formateurId && { formateurId: query.formateurId }),
+  ...(query.minPrice !== undefined || query.maxPrice !== undefined) && {
+    price: {
+      ...(query.minPrice !== undefined && { gte: query.minPrice }),
+      ...(query.maxPrice !== undefined && { lte: query.maxPrice }),
+    },
+  },
+  ...(query.search && {
+    OR: [
+      { title:       { contains: query.search, mode: 'insensitive' } },
+      { description: { contains: query.search, mode: 'insensitive' } },
+    ],
+  }),
+};
+
+const skip = (page - 1) * limit;
+
+const [courses, total] = await this.prisma.$transaction([
+  this.prisma.course.findMany({
+    where,
+    orderBy: { [sortBy]: sortOrder },
+    skip,
+    take: limit,
+    select: {
+      id: true, title: true, description: true, thumbnail: true,
+      price: true, level: true, category: true, createdAt: true,
+      formateur: {
+        select: { id: true, firstName: true, lastName: true, avatar: true },
+      },
+      _count: { select: { enrollments: true, modules: true } },
+    },
+  }),
+  this.prisma.course.count({ where }),
+]);
+```
+
+`$transaction([findMany, count])` issues both SQL statements in a single round-trip.
+The `select` projection prevents over-fetching — no modules or lessons are loaded.
+
+---
+
+## 37. Prisma Schema — Changes Required
+
+### Base feature
+
+No schema changes are required. The existing schema supports all filters:
+
+| Filter / capability             | Existing provision                                      |
+|---------------------------------|---------------------------------------------------------|
+| Publish gating                  | `Course.published Boolean @default(false)`             |
+| Level filter                    | `Course.level Level` enum                              |
+| Category filter                 | `Course.category String?`                              |
+| Price range filter              | `Course.price Float`                                   |
+| Formateur filter                | `Course.formateurId String`                            |
+| Case-insensitive title search   | Prisma `contains + mode: 'insensitive'` → `ILIKE`     |
+| Enrollment count                | `_count.enrollments` (no extra query)                  |
+| Module count                    | `_count.modules` (no extra query)                      |
+
+### Optional performance migration (deferred)
+
+Add a composite index to speed up the most common combined filter (`level + category + price`):
+
+```prisma
+// In schema.prisma — Course model
+@@index([published, level, category, price])
+```
+
+Migration name: `add_course_catalogue_index`
+
+This index is **not required to ship the feature** — add it once query plans show a
+sequential scan on the `courses` table at volume.
+
+---
+
+## 38. Folder Structure — New Files
+
+```
+apps/api/src/
+│
+└── courses/
+    ├── courses.controller.ts           # Add GET / handler
+    ├── courses.service.ts              # Add findAll() method
+    └── dto/
+        ├── create-course.dto.ts        # existing
+        ├── update-course.dto.ts        # existing
+        ├── course-detail.dto.ts        # existing (§27)
+        ├── course-content.dto.ts       # existing (§27)
+        ├── course-list-query.dto.ts    # NEW — query params + validation
+        └── course-list.dto.ts          # NEW — CourseListDto + CoursePreviewDto
+```
+
+No new NestJS modules are needed. The endpoint lives in the existing `CoursesModule`.
+
+---
+
+## 39. Controller Wiring
+
+```typescript
+// courses.controller.ts (addition)
+
+@Get()
+@Public()
+findAll(
+  @Query() query: CourseListQueryDto,
+): Promise<CourseListDto> {
+  return this.coursesService.findAll(query);
+}
+```
+
+- Decorated with `@Public()` — bypasses `JwtAccessGuard` globally applied in `AppModule`.
+- `@Query()` with `ValidationPipe` (configured globally) automatically strips unknown
+  fields and applies `class-transformer` coercions (`@Type(() => Number)`).
+- Handler placed **before** `@Get(':id')` in the controller class to avoid NestJS
+  routing ambiguity (literal segment takes precedence over param segment when ordered first).
+
+---
+
+## 40. Updated RBAC Matrix (Addendum)
+
+Addition to the table in §9:
+
+| Route              | Public? | RolesGuard | Required Role    |
+|--------------------|---------|------------|------------------|
+| `GET  /courses`    | ✓       | —          | none (public)    |
+
+---
+
+## 41. Error Handling
+
+| Condition                          | HTTP Status | Message                                    |
+|------------------------------------|-------------|--------------------------------------------|
+| `limit` exceeds `50`               | `400`       | `limit must not be greater than 50`        |
+| Invalid `level` enum value         | `400`       | `level must be a valid enum value`         |
+| Invalid `formateurId` (not UUID)   | `400`       | `formateurId must be a UUID`               |
+| `minPrice > maxPrice`              | `400`       | Validated in service: `BadRequestException`|
+| No results                         | `200`       | `{ data: [], meta: { total: 0, ... } }`    |
+
+Empty results return `200` with an empty array — never `404`.
+
+---
+
+## 42. Key Design Invariants
+
+- **Only published courses are ever returned** — the `published: true` filter is hard-coded
+  in the service, not left to the caller. Drafts and unpublished courses are never visible
+  via this endpoint regardless of auth state.
+- **`_count` replaces aggregate sub-queries** — Prisma's relation count projection is
+  translated to a single SQL `LEFT JOIN ... COUNT(*)`, avoiding N+1 patterns.
+- **`select` projection is explicit** — no `include` shorthand that would pull modules,
+  lessons, or quiz data into a listing response. Bandwidth and query cost stay proportional
+  to the page size.
+- **Defaults live in the DTO, not the service** — `page = 1`, `limit = 12`, `sortBy =
+  'createdAt'`, `sortOrder = 'desc'` are declared on `CourseListQueryDto`. The service
+  can always assume these fields are defined.
+- **`$transaction` pairs `findMany` and `count`** — ensures pagination metadata is
+  consistent with the data slice (no interleaved writes can shift the count between calls).
+- **Handler ordering in controller** — `GET /courses` (literal) is declared before
+  `GET /courses/:id` (param) to prevent NestJS from capturing `"courses"` as the `:id`
+  segment in edge-case routing.

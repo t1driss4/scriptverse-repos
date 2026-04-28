@@ -2,6 +2,121 @@
 
 ---
 
+## 2026-04-28 — Ticket bbaee: "API: catalogue de cours (listing + recherche/filtre)"
+
+### Résumé
+
+Réécriture complète de `GET /courses` pour exposer un catalogue paginé, filtrable et triable. L'endpoint reste public ; sa signature change d'un tableau brut à une enveloppe `{ data, meta }`. La logique de filtrage est encapsulée dans un DTO de query dédié (`CourseListQueryDto`) validé par le `ValidationPipe` global. La requête DB utilise un `$transaction([findMany, count])` pour ramener les résultats et le total en un seul aller-retour. Deux nouveaux DTOs TypeScript matérialisent la réponse (`CoursePreviewDto`, `PaginationMeta`). Les validations du DTO de création ont été renforcées en parallèle (`@IsUrl`, `@MaxLength`, `@Max`). 44 nouveaux tests unitaires couvrent la logique `findAll` (valeurs par défaut, chaque filtre isolé, combinaisons, tri, pagination, cas d'erreur).
+
+### Architecture
+
+**Endpoint**
+
+| Méthode | Route | Auth | Comportement |
+|---------|-------|------|--------------|
+| `GET` | `/courses` | Public | Catalogue paginé avec search / filtres / tri |
+
+**Paramètres de query (`CourseListQueryDto`)**
+
+| Paramètre | Type | Défaut | Validation |
+|-----------|------|--------|-----------|
+| `search` | `string` | — | ILIKE sur `title` et `description` (insensible à la casse) |
+| `level` | `DEBUTANT \| INTERMEDIAIRE \| AVANCE` | — | `@IsEnum(Level)` |
+| `category` | `string` | — | Correspondance exacte sur `Course.category` |
+| `minPrice` | `number` | — | `@Min(0)` + `@Type(() => Number)` |
+| `maxPrice` | `number` | — | `@Min(0)` + `@Type(() => Number)` |
+| `formateurId` | `UUID` | — | `@IsUUID()` |
+| `page` | `number` | `1` | `@IsInt @Min(1)` |
+| `limit` | `number` | `12` | `@IsInt @Min(1) @Max(50)` |
+| `sortBy` | `createdAt \| price \| title` | `createdAt` | `@IsEnum(...)` |
+| `sortOrder` | `asc \| desc` | `desc` | `@IsEnum(...)` |
+
+**Format de réponse (`CourseListDto`)**
+
+```typescript
+{
+  data: CoursePreviewDto[];   // id, title, description, thumbnail, price, level, category,
+                              // formateur (id/firstName/lastName/avatar), enrollmentCount, moduleCount, createdAt
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+```
+
+**Construction du `where` Prisma**
+
+Les filtres sont composés conditionnellement en un seul objet `Prisma.CourseWhereInput` :
+
+```typescript
+const where: Prisma.CourseWhereInput = {
+  published: true,
+  ...(query.level && { level: query.level }),
+  ...(query.category && { category: query.category }),
+  ...(query.formateurId && { formateurId: query.formateurId }),
+  ...((query.minPrice !== undefined || query.maxPrice !== undefined) && {
+    price: {
+      ...(query.minPrice !== undefined && { gte: query.minPrice }),
+      ...(query.maxPrice !== undefined && { lte: query.maxPrice }),
+    },
+  }),
+  ...(query.search && {
+    OR: [
+      { title: { contains: query.search, mode: 'insensitive' } },
+      { description: { contains: query.search, mode: 'insensitive' } },
+    ],
+  }),
+};
+```
+
+La recherche plein-texte utilise `mode: 'insensitive'` (mapping PostgreSQL `ILIKE`) sans index full-text — suffisant pour le MVP, à remplacer par un index `tsvector` en v2.
+
+**Requête DB**
+
+`findMany` + `count` groupés dans un `$transaction` pour un seul aller-retour réseau. `findMany` utilise un `select` projeté (pas `include`) pour n'exposer que les champs utiles au catalogue et exclure les URL vidéo des leçons.
+
+**Invariant métier**
+
+Lorsque `minPrice > maxPrice`, le service lève `BadRequestException('minPrice must not be greater than maxPrice')` avant d'interroger la base. Le cas `minPrice === maxPrice` est valide (filtre sur un prix exact).
+
+**Améliorations connexes**
+
+- `update` et `remove` du contrôleur : `@Param('id')` renforcé avec `ParseUUIDPipe`
+- `assertOwner` : message d'erreur générique (`NotFoundException()` sans détail) pour éviter l'énumération d'identifiants
+- `findContent` : le `$transaction` enveloppe maintenant un `.catch` qui convertit `P2025` en `NotFoundException` propre au lieu de laisser Prisma propager une erreur interne
+- `CreateCourseDto` : `thumbnail` → `@IsUrl()` ; `title` → `@MaxLength(255)` ; `description` → `@MaxLength(5000)` ; `price` → `@Max(99999)` ; `category` → `@MaxLength(100)`
+
+### Fichiers créés/modifiés
+
+```
+apps/api/src/courses/
+├── courses.controller.ts          # findAll accepte @Query() CourseListQueryDto ; ParseUUIDPipe sur update/remove
+├── courses.service.ts             # findAll réécrit — filtres, $transaction, CourseListDto
+├── courses.controller.spec.ts     # +10 tests findAll (passage query, chaque filtre, combinaison)
+├── courses.service.spec.ts        # +34 tests findAll (defaults, résultat vide, pagination, tri, filtres unitaires)
+└── dto/
+    ├── course-list-query.dto.ts   # NOUVEAU — CourseListQueryDto (10 paramètres, @Type coercition)
+    ├── course-list.dto.ts         # NOUVEAU — CourseListDto / CoursePreviewDto / PaginationMeta / FormateurPreviewDto
+    └── create-course.dto.ts       # @IsUrl + @MaxLength + @Max
+```
+
+### Tests
+
+- **34 tests service** en deux `describe` : `findAll` (cas de base : valeurs par défaut, meta, mapping DTO, totalPages=0, BadRequestException) ; `findAll – query construction` (assertions directes sur les appels `prisma.course.count` et `findMany` : chaque filtre présent/absent, OR search, price gte/lte, skip/take, orderBy, select projection)
+- **10 tests contrôleur** : délégation avec query complet, query vide, chaque filtre isolé, combinaison de tous les paramètres, valeur de retour propagée intacte
+
+Total suite après ce ticket : **213 tests, ~22 suites — tous verts** *(selon le décompte local avant commit)*
+
+### Notes
+
+- La coercition des query params numériques (`page`, `limit`, `minPrice`, `maxPrice`) est gérée par `@Type(() => Number)` de `class-transformer`, requis car HTTP transmet tous les query params en chaînes.
+- `select` projeté au lieu de `include` : garantit que `modules`, `lessons` et leurs `url` n'apparaissent jamais dans la réponse du catalogue, même si le schéma évolue.
+- En v2 : remplacer la recherche ILIKE par un index PostgreSQL `tsvector` (GIN) pour les performances sur de grands catalogues ; ajouter un filtre `isFree: boolean` (raccourci `price = 0`) ; envisager un cursor-based pagination pour les flux infinis.
+
+---
+
 ## 2026-04-28 — Ticket 72033: "API: détail cours (modules/chapitres) + accès (inscription)"
 
 ### Résumé

@@ -1,13 +1,17 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
 import { CourseDetailDto } from './dto/course-detail.dto';
 import { CourseContentDto } from './dto/course-content.dto';
+import { CourseListQueryDto } from './dto/course-list-query.dto';
+import { CourseListDto } from './dto/course-list.dto';
 
 @Injectable()
 export class CoursesService {
@@ -22,15 +26,85 @@ export class CoursesService {
     });
   }
 
-  async findAll() {
-    return this.prisma.course.findMany({
-      where: { published: true },
-      include: {
-        formateur: { select: { id: true, firstName: true, lastName: true } },
-        _count: { select: { modules: true, enrollments: true } },
+  async findAll(query: CourseListQueryDto = {}): Promise<CourseListDto> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 12;
+    const skip = (page - 1) * limit;
+    const sortBy = query.sortBy ?? 'createdAt';
+    const sortOrder = query.sortOrder ?? 'desc';
+
+    if (
+      query.minPrice !== undefined &&
+      query.maxPrice !== undefined &&
+      query.minPrice > query.maxPrice
+    ) {
+      throw new BadRequestException('minPrice must not be greater than maxPrice');
+    }
+
+    const where: Prisma.CourseWhereInput = {
+      published: true,
+      ...(query.level && { level: query.level }),
+      ...(query.category && { category: query.category }),
+      ...(query.formateurId && { formateurId: query.formateurId }),
+      ...((query.minPrice !== undefined || query.maxPrice !== undefined) && {
+        price: {
+          ...(query.minPrice !== undefined && { gte: query.minPrice }),
+          ...(query.maxPrice !== undefined && { lte: query.maxPrice }),
+        },
+      }),
+      ...(query.search && {
+        OR: [
+          { title: { contains: query.search, mode: 'insensitive' } },
+          { description: { contains: query.search, mode: 'insensitive' } },
+        ],
+      }),
+    };
+
+    const [courses, total] = await this.prisma.$transaction([
+      this.prisma.course.findMany({
+        where,
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          thumbnail: true,
+          price: true,
+          level: true,
+          category: true,
+          createdAt: true,
+          formateur: {
+            select: { id: true, firstName: true, lastName: true, avatar: true },
+          },
+          _count: { select: { enrollments: true, modules: true } },
+        },
+      }),
+      this.prisma.course.count({ where }),
+    ]);
+
+    return {
+      data: courses.map((c) => ({
+        id: c.id,
+        title: c.title,
+        description: c.description,
+        thumbnail: c.thumbnail,
+        price: c.price,
+        level: c.level,
+        category: c.category,
+        formateur: c.formateur,
+        enrollmentCount: c._count.enrollments,
+        moduleCount: c._count.modules,
+        createdAt: c.createdAt.toISOString(),
+      })),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       },
-      orderBy: { createdAt: 'desc' },
-    });
+    };
   }
 
   async findMine(formateurId: string) {
@@ -97,41 +171,48 @@ export class CoursesService {
     });
     if (!enrollment) throw new ForbiddenException('Not enrolled in this course');
 
-    const [course, progressRecords, attempts] = await this.prisma.$transaction([
-      this.prisma.course.findUniqueOrThrow({
-        where: { id: courseId },
-        include: {
-          modules: {
-            orderBy: { order: 'asc' },
-            include: {
-              lessons: { orderBy: { order: 'asc' } },
-              quiz: {
-                include: {
-                  questions: {
-                    orderBy: { order: 'asc' },
-                    select: {
-                      id: true,
-                      question: true,
-                      options: true,
-                      order: true,
+    const [course, progressRecords, attempts] = await this.prisma
+      .$transaction([
+        this.prisma.course.findUniqueOrThrow({
+          where: { id: courseId },
+          include: {
+            modules: {
+              orderBy: { order: 'asc' },
+              include: {
+                lessons: { orderBy: { order: 'asc' } },
+                quiz: {
+                  include: {
+                    questions: {
+                      orderBy: { order: 'asc' },
+                      select: {
+                        id: true,
+                        question: true,
+                        options: true,
+                        order: true,
+                      },
                     },
                   },
                 },
               },
             },
           },
-        },
-      }),
-      this.prisma.moduleProgress.findMany({
-        where: { userId, module: { courseId } },
-        select: { moduleId: true, completedAt: true },
-      }),
-      this.prisma.quizAttempt.findMany({
-        where: { userId, quiz: { module: { courseId } } },
-        orderBy: { completedAt: 'desc' },
-        select: { quizId: true, score: true, completedAt: true },
-      }),
-    ]);
+        }),
+        this.prisma.moduleProgress.findMany({
+          where: { userId, module: { courseId } },
+          select: { moduleId: true, completedAt: true },
+        }),
+        this.prisma.quizAttempt.findMany({
+          where: { userId, quiz: { module: { courseId } } },
+          orderBy: { completedAt: 'desc' },
+          select: { quizId: true, score: true, completedAt: true },
+        }),
+      ])
+      .catch((e: unknown) => {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+          throw new NotFoundException();
+        }
+        throw e;
+      });
 
     const progressMap = new Map(
       progressRecords.map((p) => [p.moduleId, p.completedAt] as [string, Date]),
@@ -194,7 +275,7 @@ export class CoursesService {
 
   private async assertOwner(courseId: string, formateurId: string) {
     const course = await this.prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) throw new NotFoundException(`Course ${courseId} not found`);
+    if (!course) throw new NotFoundException();
     if (course.formateurId !== formateurId) {
       throw new ForbiddenException('You are not the owner of this course');
     }

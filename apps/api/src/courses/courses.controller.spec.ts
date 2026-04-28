@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Role } from '@prisma/client';
+import { Level, Role } from '@prisma/client';
 import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { CoursesController } from './courses.controller';
@@ -74,19 +74,102 @@ describe('CoursesController', () => {
   });
 
   describe('findAll', () => {
-    it('delegates to coursesService.findAll', () => {
-      const expected = [{ id: COURSE_ID }];
+    it('delegates to coursesService.findAll with query params', () => {
+      const query = { search: 'react', level: Level.DEBUTANT, page: 1, limit: 10 };
+      const expected = { data: [], meta: { total: 0, page: 1, limit: 10, totalPages: 0 } };
       service.findAll.mockReturnValue(expected);
 
-      const result = controller.findAll();
+      const result = controller.findAll(query as any);
 
-      expect(service.findAll).toHaveBeenCalled();
+      expect(service.findAll).toHaveBeenCalledWith(query);
+      expect(result).toBe(expected);
+    });
+
+    it('delegates to coursesService.findAll with empty query', () => {
+      const expected = { data: [{ id: COURSE_ID }], meta: { total: 1, page: 1, limit: 12, totalPages: 1 } };
+      service.findAll.mockReturnValue(expected);
+
+      const result = controller.findAll({} as any);
+
+      expect(service.findAll).toHaveBeenCalledWith({});
       expect(result).toBe(expected);
     });
 
     it('is marked @Public() — accessible without authentication', () => {
       const isPublic = Reflect.getMetadata(IS_PUBLIC_KEY, controller.findAll);
       expect(isPublic).toBe(true);
+    });
+
+    it('passes level=INTERMEDIAIRE filter through to service', () => {
+      const query = { level: Level.INTERMEDIAIRE };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('passes level=AVANCE filter through to service', () => {
+      const query = { level: Level.AVANCE };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('passes category filter through to service', () => {
+      const query = { category: 'programming' };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('passes sortBy=price sortOrder=desc through to service', () => {
+      const query = { sortBy: 'price' as const, sortOrder: 'desc' as const };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('passes sortBy=createdAt sortOrder=asc through to service', () => {
+      const query = { sortBy: 'createdAt' as const, sortOrder: 'asc' as const };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('passes pagination params through to service', () => {
+      const query = { page: 2, limit: 5 };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('passes combined search and filter params through to service', () => {
+      const query = { search: 'typescript', level: Level.INTERMEDIAIRE, category: 'web', sortBy: 'price' as const, sortOrder: 'desc' as const, page: 1, limit: 5 };
+      service.findAll.mockReturnValue({ data: [], meta: {} });
+
+      controller.findAll(query as any);
+
+      expect(service.findAll).toHaveBeenCalledWith(query);
+    });
+
+    it('returns the value from coursesService.findAll', () => {
+      const expected = { data: [{ id: COURSE_ID, title: 'NestJS' }], meta: { total: 1, page: 1, limit: 12, totalPages: 1 } };
+      service.findAll.mockReturnValue(expected);
+
+      const result = controller.findAll({ search: 'NestJS' } as any);
+
+      expect(result).toBe(expected);
     });
   });
 
