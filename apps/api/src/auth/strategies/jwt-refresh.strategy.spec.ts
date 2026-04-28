@@ -20,6 +20,15 @@ describe('JwtRefreshStrategy', () => {
     strategy = new JwtRefreshStrategy();
   });
 
+  describe('constructor', () => {
+    it('throws when JWT_REFRESH_SECRET is not set', () => {
+      const original = process.env.JWT_REFRESH_SECRET;
+      delete process.env.JWT_REFRESH_SECRET;
+      expect(() => new JwtRefreshStrategy()).toThrow('JWT_REFRESH_SECRET is not set');
+      process.env.JWT_REFRESH_SECRET = original;
+    });
+  });
+
   const BASE_PAYLOAD: JwtPayload = {
     sub: 'user-uuid',
     email: 'user@example.com',
@@ -45,10 +54,9 @@ describe('JwtRefreshStrategy', () => {
       expect(result.refreshToken).toBe('some-token');
     });
 
-    it('returns empty string when Authorization header is absent', () => {
+    it('throws UnauthorizedException when Authorization header is absent', () => {
       const req = mockRequest('');
-      const result = strategy.validate(req, BASE_PAYLOAD);
-      expect(result.refreshToken).toBe('');
+      expect(() => strategy.validate(req, BASE_PAYLOAD)).toThrow('Refresh token missing');
     });
 
     it('preserves all original payload fields', () => {

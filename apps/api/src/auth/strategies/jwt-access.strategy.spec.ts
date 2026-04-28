@@ -13,6 +13,15 @@ describe('JwtAccessStrategy', () => {
     strategy = new JwtAccessStrategy();
   });
 
+  describe('constructor', () => {
+    it('throws when JWT_ACCESS_SECRET is not set', () => {
+      const original = process.env.JWT_ACCESS_SECRET;
+      delete process.env.JWT_ACCESS_SECRET;
+      expect(() => new JwtAccessStrategy()).toThrow('JWT_ACCESS_SECRET is not set');
+      process.env.JWT_ACCESS_SECRET = original;
+    });
+  });
+
   describe('validate', () => {
     it('returns the JWT payload unchanged', () => {
       const payload: JwtPayload = {
