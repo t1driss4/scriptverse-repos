@@ -7,8 +7,7 @@ const SALT_ROUNDS = 10;
 
 async function main() {
   // ── Admin user ────────────────────────────────────────────────────────────
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD;
-  if (!adminPassword) throw new Error('SEED_ADMIN_PASSWORD is required');
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'Admin1234!';
   const adminHash = await bcrypt.hash(adminPassword, SALT_ROUNDS);
 
   const admin = await prisma.user.upsert({
@@ -24,8 +23,7 @@ async function main() {
   });
 
   // ── Demo formateur ────────────────────────────────────────────────────────
-  const formateurPassword = process.env.SEED_FORMATEUR_PASSWORD;
-  if (!formateurPassword) throw new Error('SEED_FORMATEUR_PASSWORD is required');
+  const formateurPassword = process.env.SEED_FORMATEUR_PASSWORD ?? 'Formateur1234!';
   const formateurHash = await bcrypt.hash(formateurPassword, SALT_ROUNDS);
 
   const formateur = await prisma.user.upsert({
@@ -41,8 +39,7 @@ async function main() {
   });
 
   // ── Demo apprenant ────────────────────────────────────────────────────────
-  const apprenantPassword = process.env.SEED_APPRENANT_PASSWORD;
-  if (!apprenantPassword) throw new Error('SEED_APPRENANT_PASSWORD is required');
+  const apprenantPassword = process.env.SEED_APPRENANT_PASSWORD ?? 'Apprenant1234!';
   const apprenantHash = await bcrypt.hash(apprenantPassword, SALT_ROUNDS);
 
   const apprenant = await prisma.user.upsert({

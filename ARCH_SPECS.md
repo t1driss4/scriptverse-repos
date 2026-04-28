@@ -393,13 +393,14 @@ The schema models a **learning platform** with the following core domains:
 apps/api/
 ├── prisma/
 │   ├── schema.prisma                   # Source of truth — models, enums, relations
+│   ├── seed.ts                         # Idempotent seed: 3 demo users, 1 course, 2 modules, 4 lessons, 1 quiz
 │   └── migrations/
 │       ├── migration_lock.toml         # Pins migration provider (postgresql)
-│       └── <timestamp>_<name>/
+│       └── <timestamp>_<name>/         # e.g. 20240101000000_initial_schema/
 │           └── migration.sql           # Auto-generated SQL (never edited by hand)
 └── src/
     └── prisma/
-        ├── prisma.module.ts            # Global NestJS module (exports PrismaService)
+        ├── prisma.module.ts            # @Global() NestJS module (exports PrismaService)
         └── prisma.service.ts           # PrismaClient lifecycle (onModuleInit / onModuleDestroy)
 ```
 
