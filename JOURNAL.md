@@ -2,6 +2,142 @@
 
 ---
 
+## 2026-04-28 — Ticket 32924: "Auth: refresh token + guards/roles (RBAC)"
+
+### Résumé
+
+Mise en place de l'infrastructure d'authentification complète côté API : rotation des refresh tokens (hachés en base via bcrypt), guard JWT global appliqué à toutes les routes sauf celles décorées `@Public()`, et système RBAC à trois niveaux (APPRENANT / FORMATEUR / ADMIN) piloté par le décorateur `@Roles()`. Le ticket couvre également l'ajout du décorateur `@GetUser()` pour extraire le payload JWT dans les handlers, le rate limiting par `@Throttle` sur les endpoints sensibles, une migration Prisma ajoutant le champ `refreshHash` sur `User`, et un seed idempotent de données de démonstration. 81 tests unitaires couvrent l'ensemble des nouvelles pièces (service, contrôleur, guards, stratégies, DTOs, décorateurs).
+
+### Architecture
+
+**Rotation des refresh tokens**
+
+À chaque appel réussi à `POST /auth/refresh`, `POST /auth/login` ou `POST /auth/signup`, un nouveau couple `{ accessToken, refreshToken }` est émis. Le refresh token brut n'est jamais stocké : seul son hash bcrypt (`refreshHash`) est persisté sur le modèle `User`. Lors d'un refresh, `bcrypt.compare` valide le token entrant contre le hash stocké, puis le hash est immédiatement remplacé par celui du nouveau token — rendant l'ancien invalide. À la déconnexion, `refreshHash` est mis à `null`.
+
+**Guard global + `@Public()`**
+
+`JwtAccessGuard` est enregistré comme `APP_GUARD` dans `AuthModule` (fourni en tant que `{ provide: APP_GUARD, useClass: JwtAccessGuard }`), ce qui le applique globalement à toutes les routes. Les endpoints publics (signup, login, refresh, reset-password) portent le décorateur `@Public()` qui pose le métadonnée `isPublic: true` ; `JwtAccessGuard` lit cette métadonnée via le `Reflector` et court-circuite la vérification JWT.
+
+**`JwtRefreshGuard` et `JwtRefreshStrategy`**
+
+La route `POST /auth/refresh` est marquée `@Public()` (pour passer le guard global) puis protégée individuellement par `@UseGuards(JwtRefreshGuard)`. `JwtRefreshStrategy` vérifie le token signé avec `JWT_REFRESH_SECRET`, extrait le token brut depuis l'en-tête `Authorization` (`passReqToCallback: true`), et retourne `{ ...payload, refreshToken }` — exposant le token brut au service pour la comparaison bcrypt.
+
+**RBAC via `@Roles()` + `RolesGuard`**
+
+`RolesGuard` lit les rôles requis depuis les métadonnées du handler (ou de la classe) via `Reflector.getAllAndOverride`. Il accède au `user` de la requête (posé par le guard JWT en amont) et vérifie que `user.role` figure dans la liste autorisée. Si aucun rôle n'est déclaré sur le handler, l'accès est accordé sans vérification. `RolesGuard` est utilisé en combinaison avec `JwtAccessGuard` : un handler FORMATEUR porte à la fois `@UseGuards(JwtAccessGuard)` (ou bénéficie du guard global) et `@Roles(Role.FORMATEUR)`.
+
+**Décorateurs**
+
+- `@Public()` — métadonnée `isPublic: true` — permet de passer le guard JWT global
+- `@Roles(...roles)` — métadonnée `ROLES_KEY` — liste les rôles autorisés pour un handler
+- `@GetUser()` — param décorateur basé sur `createParamDecorator` — extrait `request.user` du contexte HTTP et le type comme `JwtPayload | JwtRefreshPayload`
+
+### Ce qui a été implémenté
+
+**Service (`apps/api/src/auth/auth.service.ts`)**
+
+| Méthode | Comportement |
+|---|---|
+| `signup` | Hash password, crée l'utilisateur, émet tokens, stocke refreshHash |
+| `login` | Vérifie password, émet tokens, stocke refreshHash |
+| `refresh` | Vérifie refreshHash via bcrypt, rotation complète (nouveau couple + nouveau hash) |
+| `logout` | Met `refreshHash` à `null` |
+| `getMe` | Retourne le profil utilisateur sans `passwordHash` ni `refreshHash` |
+| `resetPassword` | Stub sécurisé (sans divulgation d'existence d'email) |
+| `issueTokens` (privé) | Génère access (15 min) + refresh (7 j) en parallèle via `Promise.all` |
+| `storeRefreshHash` (privé) | Hache le refresh token brut et le persiste sur `User.refreshHash` |
+
+**Contrôleur (`apps/api/src/auth/auth.controller.ts`)**
+
+Six endpoints avec rate limiting et guards :
+
+| Route | Accès | Throttle |
+|---|---|---|
+| `POST /auth/signup` | Public | 5 req/min |
+| `POST /auth/login` | Public | 10 req/min |
+| `POST /auth/refresh` | `JwtRefreshGuard` | 5 req/min |
+| `POST /auth/logout` | `JwtAccessGuard` | — |
+| `GET /auth/me` | `JwtAccessGuard` | — |
+| `POST /auth/reset-password` | Public | 5 req/min |
+
+**Guards (`apps/api/src/auth/guards/`)**
+
+| Fichier | Rôle |
+|---|---|
+| `jwt-access.guard.ts` | Étend `AuthGuard('jwt')`, lit `isPublic` via Reflector pour court-circuiter |
+| `jwt-refresh.guard.ts` | Étend `AuthGuard('jwt-refresh')` — appliqué uniquement sur `/auth/refresh` |
+| `roles.guard.ts` | Lit `ROLES_KEY`, compare `user.role` aux rôles requis, lève `UnauthorizedException` si user absent |
+
+**Stratégies (`apps/api/src/auth/strategies/`)**
+
+| Fichier | Rôle |
+|---|---|
+| `jwt-access.strategy.ts` | `PassportStrategy(Strategy, 'jwt')` — extrait le Bearer token, vérifie avec `JWT_ACCESS_SECRET`, retourne le payload tel quel |
+| `jwt-refresh.strategy.ts` | `PassportStrategy(Strategy, 'jwt-refresh')` — `passReqToCallback: true`, extrait le token brut de l'en-tête, retourne `{ ...payload, refreshToken }` |
+
+**Décorateurs (`apps/api/src/auth/decorators/`)**
+
+| Fichier | Rôle |
+|---|---|
+| `public.decorator.ts` | `@Public()` — pose `isPublic: true` comme métadonnée |
+| `roles.decorator.ts` | `@Roles(...roles)` — pose la liste des rôles sous `ROLES_KEY` |
+| `get-user.decorator.ts` | `@GetUser()` — param décorateur extrayant `request.user` |
+
+**Types (`apps/api/src/auth/types/jwt-payload.type.ts`)**
+
+- `JwtPayload` : `{ sub, email, role }`
+- `JwtRefreshPayload` : `JwtPayload & { refreshToken }`
+
+**Migration Prisma et seed**
+
+- `apps/api/prisma/migrations/20240101000000_initial_schema/migration.sql` — schéma complet avec `refreshHash String? @db.Text` sur la table `User`
+- `apps/api/prisma/seed.ts` — seed idempotent (upsert) : utilisateur admin, formateur (Jean Dupont), apprenant (Marie Martin), et un cours de démonstration avec module et leçon ; les mots de passe sont chargés depuis `SEED_*_PASSWORD` (jamais hardcodés)
+
+### Statut des tests
+
+| Suite | Cas | Statut |
+|---|---|---|
+| `auth.service.spec.ts` | signup, login, refresh, logout, getMe, resetPassword | Écrits, non exécutés en CI |
+| `auth.controller.spec.ts` | délégation vers le service pour chaque endpoint | Écrits, non exécutés en CI |
+| `jwt-access.guard.spec.ts` | isPublic court-circuite, JWT invalide → 401 | Écrits, non exécutés en CI |
+| `roles.guard.spec.ts` | 7 cas (pas de rôles requis, match, non-match, multi-rôles, user absent) | Écrits, non exécutés en CI |
+| `jwt-access.strategy.spec.ts` | secret manquant → throw, validate retourne payload inchangé, tous les rôles | Écrits, non exécutés en CI |
+| `jwt-refresh.strategy.spec.ts` | secret manquant → throw, extraction token, casse mixte Bearer, header absent → throw, payload préservé | Écrits, non exécutés en CI |
+| `get-user.decorator.spec.ts` | extraction `request.user` depuis le contexte HTTP | Écrits, non exécutés en CI |
+| `login.dto.spec.ts` | (existant) | — |
+| `signup.dto.spec.ts` | (existant) | — |
+| `reset-password.dto.spec.ts` | (existant) | — |
+
+> 81 tests unitaires au total sur 12 suites. Lancement local : `pnpm --filter api test`.
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/api/src/auth/auth.service.ts` | Logique signup/login/refresh/logout/getMe + rotation refreshHash |
+| `apps/api/src/auth/auth.controller.ts` | 6 endpoints avec rate limiting, guards, `@GetUser()` |
+| `apps/api/src/auth/guards/jwt-access.guard.ts` | Guard JWT global avec support `@Public()` |
+| `apps/api/src/auth/guards/jwt-refresh.guard.ts` | Guard JWT dédié au endpoint `/auth/refresh` |
+| `apps/api/src/auth/guards/roles.guard.ts` | Guard RBAC basé sur `@Roles()` et `Reflector` |
+| `apps/api/src/auth/strategies/jwt-access.strategy.ts` | Stratégie Passport pour les access tokens |
+| `apps/api/src/auth/strategies/jwt-refresh.strategy.ts` | Stratégie Passport pour les refresh tokens (token brut annexé) |
+| `apps/api/src/auth/decorators/public.decorator.ts` | `@Public()` — bypass du guard JWT global |
+| `apps/api/src/auth/decorators/roles.decorator.ts` | `@Roles()` — liste de rôles requis |
+| `apps/api/src/auth/decorators/get-user.decorator.ts` | `@GetUser()` — accès typé au payload JWT dans les handlers |
+| `apps/api/src/auth/types/jwt-payload.type.ts` | Types `JwtPayload` et `JwtRefreshPayload` |
+| `apps/api/prisma/migrations/20240101000000_initial_schema/migration.sql` | Migration initiale avec `refreshHash` sur `User` |
+| `apps/api/prisma/seed.ts` | Seed idempotent : admin, formateur, apprenant, cours de démo |
+
+### Notes
+
+- Le refresh token n'est jamais stocké en clair : seul le bcrypt hash est persisté. Même en cas de fuite de la base, les tokens ne peuvent pas être réutilisés directement.
+- La rotation à chaque refresh garantit qu'un token volé est invalidé dès que le titulaire légitime rafraîchit sa session.
+- Le guard global `APP_GUARD` simplifie la configuration : les nouvelles routes sont automatiquement protégées sans oublier d'ajouter un guard manuellement ; seules les exceptions explicites portent `@Public()`.
+- `RolesGuard` est indépendant de `JwtAccessGuard` et peut être utilisé sur n'importe quel handler ; les deux sont souvent combinés sur les routes FORMATEUR et ADMIN.
+- En v2 : brancher le hash du refresh token sur une table dédiée (multi-session) plutôt que sur le champ unique `refreshHash` de `User` — nécessaire pour autoriser plusieurs appareils connectés simultanément.
+
+---
+
 ## 2026-04-27 — Ticket 42c4f: "Intégrer l'API au front (auth + catalogue + cours)"
 
 ### Résumé

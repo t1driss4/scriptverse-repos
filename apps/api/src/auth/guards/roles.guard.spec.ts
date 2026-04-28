@@ -1,4 +1,4 @@
-import { ExecutionContext } from '@nestjs/common';
+import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Role } from '@prisma/client';
 import { RolesGuard } from './roles.guard';
@@ -57,8 +57,8 @@ describe('RolesGuard', () => {
     expect(guard.canActivate(mockContext(Role.APPRENANT))).toBe(false);
   });
 
-  it('denies access when user is undefined (unauthenticated)', () => {
+  it('throws UnauthorizedException when user is undefined (unauthenticated)', () => {
     reflector.getAllAndOverride.mockReturnValue([Role.FORMATEUR]);
-    expect(guard.canActivate(mockContext(undefined))).toBe(false);
+    expect(() => guard.canActivate(mockContext(undefined))).toThrow(UnauthorizedException);
   });
 });

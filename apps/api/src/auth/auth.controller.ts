@@ -23,10 +23,6 @@ import { Public } from './decorators/public.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  /**
-   * POST /auth/signup
-   * Register a new user and return access + refresh tokens.
-   */
   @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('signup')
@@ -35,10 +31,6 @@ export class AuthController {
     return this.authService.signup(dto);
   }
 
-  /**
-   * POST /auth/login
-   * Authenticate and return access + refresh tokens.
-   */
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
@@ -47,11 +39,7 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
-  /**
-   * POST /auth/refresh
-   * Issue a new token pair using a valid refresh token (Bearer).
-   * @Public skips the global JwtAccessGuard; JwtRefreshGuard handles auth here.
-   */
+  // @Public skips the global JwtAccessGuard; JwtRefreshGuard handles auth here.
   @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @UseGuards(JwtRefreshGuard)
@@ -61,10 +49,6 @@ export class AuthController {
     return this.authService.refresh(user.sub, user.refreshToken);
   }
 
-  /**
-   * POST /auth/logout
-   * Invalidate the current refresh token.
-   */
   @UseGuards(JwtAccessGuard)
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -72,20 +56,12 @@ export class AuthController {
     return this.authService.logout(user.sub);
   }
 
-  /**
-   * GET /auth/me
-   * Return the authenticated user's profile (no sensitive fields).
-   */
   @UseGuards(JwtAccessGuard)
   @Get('me')
   getMe(@GetUser() user: JwtPayload) {
     return this.authService.getMe(user.sub);
   }
 
-  /**
-   * POST /auth/reset-password
-   * Request a password-reset email (stub – email sending not yet implemented).
-   */
   @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('reset-password')
