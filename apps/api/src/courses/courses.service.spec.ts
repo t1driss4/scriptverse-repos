@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Level, LessonType } from '@prisma/client';
 import { CoursesService } from './courses.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -61,6 +61,7 @@ describe('CoursesService', () => {
   let service: CoursesService;
   let prisma: {
     course: {
+      count: jest.Mock;
       findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       findMany: jest.Mock;
@@ -77,6 +78,7 @@ describe('CoursesService', () => {
   beforeEach(async () => {
     prisma = {
       course: {
+        count: jest.fn(),
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         findMany: jest.fn(),
@@ -98,6 +100,369 @@ describe('CoursesService', () => {
     }).compile();
 
     service = module.get<CoursesService>(CoursesService);
+  });
+
+  // ─── findAll ──────────────────────────────────────────────────────────────
+
+  describe('findAll', () => {
+    const mockCourseRow = {
+      id: COURSE_ID,
+      title: 'Test Course',
+      description: 'A test course',
+      thumbnail: null,
+      price: 0,
+      level: Level.DEBUTANT,
+      category: 'programming',
+      createdAt: now,
+      formateur: { id: FORMATEUR_ID, firstName: 'Jean', lastName: 'Dupont', avatar: null },
+      _count: { modules: 2, enrollments: 5 },
+    };
+
+    it('returns paginated courses with default meta', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({});
+
+      expect(result.data).toHaveLength(1);
+      expect(result.meta).toEqual({ total: 1, page: 1, limit: 12, totalPages: 1 });
+    });
+
+    it('maps course row to CoursePreviewDto shape', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({});
+      const item = result.data[0];
+
+      expect(item.id).toBe(COURSE_ID);
+      expect(item.moduleCount).toBe(2);
+      expect(item.enrollmentCount).toBe(5);
+      expect(item.createdAt).toBe(now.toISOString());
+      expect(item.formateur).toEqual({ id: FORMATEUR_ID, firstName: 'Jean', lastName: 'Dupont', avatar: null });
+    });
+
+    it('formateur includes avatar field', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({});
+
+      expect(result.data[0].formateur).toHaveProperty('avatar');
+    });
+
+    it('uses custom page and limit in meta', async () => {
+      prisma.$transaction.mockResolvedValue([[], 45]);
+
+      const result = await service.findAll({ page: 3, limit: 10 });
+
+      expect(result.meta.page).toBe(3);
+      expect(result.meta.limit).toBe(10);
+      expect(result.meta.totalPages).toBe(5);
+    });
+
+    it('calls $transaction with findMany and count', async () => {
+      prisma.$transaction.mockResolvedValue([[], 0]);
+
+      await service.findAll({});
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('defaults to empty result when no courses match', async () => {
+      prisma.$transaction.mockResolvedValue([[], 0]);
+
+      const result = await service.findAll({ search: 'nonexistent' });
+
+      expect(result.data).toHaveLength(0);
+      expect(result.meta.total).toBe(0);
+      expect(result.meta.totalPages).toBe(0);
+    });
+
+    it('applies search query via $transaction call', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({ search: 'Test' });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(result.data).toHaveLength(1);
+    });
+
+    it('applies level filter via $transaction call', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({ level: Level.DEBUTANT });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(result.data[0].level).toBe(Level.DEBUTANT);
+    });
+
+    it('applies category filter via $transaction call', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({ category: 'programming' });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(result.data[0].category).toBe('programming');
+    });
+
+    it('sorts by sortBy=price when specified', async () => {
+      prisma.$transaction.mockResolvedValue([[mockCourseRow], 1]);
+
+      const result = await service.findAll({ sortBy: 'price', sortOrder: 'asc' });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(result.data).toHaveLength(1);
+    });
+
+    it('computes totalPages=0 when total is 0', async () => {
+      prisma.$transaction.mockResolvedValue([[], 0]);
+
+      const result = await service.findAll({});
+
+      expect(result.meta.totalPages).toBe(0);
+    });
+
+    it('throws BadRequestException when minPrice > maxPrice', async () => {
+      await expect(service.findAll({ minPrice: 100, maxPrice: 50 })).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException with correct message when minPrice > maxPrice', async () => {
+      await expect(service.findAll({ minPrice: 100, maxPrice: 50 })).rejects.toThrow(
+        'minPrice must not be greater than maxPrice',
+      );
+    });
+
+    it('does not throw when minPrice equals maxPrice', async () => {
+      prisma.$transaction.mockResolvedValue([[], 0]);
+
+      await expect(service.findAll({ minPrice: 50, maxPrice: 50 })).resolves.toBeDefined();
+    });
+  });
+
+  // ─── findAll – query construction ─────────────────────────────────────────
+
+  describe('findAll – query construction', () => {
+    beforeEach(() => {
+      prisma.$transaction.mockResolvedValue([[], 0]);
+    });
+
+    it('always filters by published: true', async () => {
+      await service.findAll({});
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ published: true }),
+        }),
+      );
+    });
+
+    it('adds OR search on title and description when search is provided', async () => {
+      await service.findAll({ search: 'TypeScript' });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [
+              { title: { contains: 'TypeScript', mode: 'insensitive' } },
+              { description: { contains: 'TypeScript', mode: 'insensitive' } },
+            ],
+          }),
+        }),
+      );
+    });
+
+    it('does not add OR clause when search is absent', async () => {
+      await service.findAll({});
+
+      const whereArg: Record<string, unknown> = (prisma.course.count.mock.calls[0] as [{ where: unknown }])[0].where as Record<string, unknown>;
+      expect(whereArg).not.toHaveProperty('OR');
+    });
+
+    it('adds exact level filter when level is provided', async () => {
+      await service.findAll({ level: Level.INTERMEDIAIRE });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ level: Level.INTERMEDIAIRE }),
+        }),
+      );
+    });
+
+    it('does not add level filter when level is absent', async () => {
+      await service.findAll({});
+
+      const whereArg: Record<string, unknown> = (prisma.course.count.mock.calls[0] as [{ where: unknown }])[0].where as Record<string, unknown>;
+      expect(whereArg).not.toHaveProperty('level');
+    });
+
+    it('adds exact category match when provided', async () => {
+      await service.findAll({ category: 'programming' });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ category: 'programming' }),
+        }),
+      );
+    });
+
+    it('does not add category filter when category is absent', async () => {
+      await service.findAll({});
+
+      const whereArg: Record<string, unknown> = (prisma.course.count.mock.calls[0] as [{ where: unknown }])[0].where as Record<string, unknown>;
+      expect(whereArg).not.toHaveProperty('category');
+    });
+
+    it('adds formateurId filter when provided', async () => {
+      const formateurId = '00000000-0000-0000-0000-000000000099';
+      await service.findAll({ formateurId });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ formateurId }),
+        }),
+      );
+    });
+
+    it('does not add formateurId filter when absent', async () => {
+      await service.findAll({});
+
+      const whereArg: Record<string, unknown> = (prisma.course.count.mock.calls[0] as [{ where: unknown }])[0].where as Record<string, unknown>;
+      expect(whereArg).not.toHaveProperty('formateurId');
+    });
+
+    it('adds price gte filter when minPrice is provided', async () => {
+      await service.findAll({ minPrice: 10 });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            price: expect.objectContaining({ gte: 10 }),
+          }),
+        }),
+      );
+    });
+
+    it('adds price lte filter when maxPrice is provided', async () => {
+      await service.findAll({ maxPrice: 100 });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            price: expect.objectContaining({ lte: 100 }),
+          }),
+        }),
+      );
+    });
+
+    it('adds both gte and lte when minPrice and maxPrice are provided', async () => {
+      await service.findAll({ minPrice: 10, maxPrice: 100 });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            price: { gte: 10, lte: 100 },
+          }),
+        }),
+      );
+    });
+
+    it('does not add price filter when neither minPrice nor maxPrice is provided', async () => {
+      await service.findAll({});
+
+      const whereArg: Record<string, unknown> = (prisma.course.count.mock.calls[0] as [{ where: unknown }])[0].where as Record<string, unknown>;
+      expect(whereArg).not.toHaveProperty('price');
+    });
+
+    it('applies all filters simultaneously in where clause', async () => {
+      await service.findAll({ search: 'JS', level: Level.DEBUTANT, category: 'web' });
+
+      expect(prisma.course.count).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            published: true,
+            level: Level.DEBUTANT,
+            category: 'web',
+            OR: [
+              { title: { contains: 'JS', mode: 'insensitive' } },
+              { description: { contains: 'JS', mode: 'insensitive' } },
+            ],
+          },
+        }),
+      );
+    });
+
+    it('uses createdAt desc orderBy by default', async () => {
+      await service.findAll({});
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
+      );
+    });
+
+    it('uses sortBy=createdAt with sortOrder=asc', async () => {
+      await service.findAll({ sortBy: 'createdAt', sortOrder: 'asc' });
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { createdAt: 'asc' } }),
+      );
+    });
+
+    it('uses sortBy=price with sortOrder=desc', async () => {
+      await service.findAll({ sortBy: 'price', sortOrder: 'desc' });
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { price: 'desc' } }),
+      );
+    });
+
+    it('uses sortBy=title with sortOrder=asc', async () => {
+      await service.findAll({ sortBy: 'title', sortOrder: 'asc' });
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ orderBy: { title: 'asc' } }),
+      );
+    });
+
+    it('computes skip=(page-1)*limit', async () => {
+      await service.findAll({ page: 3, limit: 10 });
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 10 }),
+      );
+    });
+
+    it('uses skip=0 for page 1', async () => {
+      await service.findAll({ page: 1, limit: 15 });
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 15 }),
+      );
+    });
+
+    it('defaults to page=1 and limit=12 when not specified', async () => {
+      await service.findAll({});
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 12 }),
+      );
+    });
+
+    it('uses select projection (not include) in findMany', async () => {
+      await service.findAll({});
+
+      expect(prisma.course.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            id: true,
+            title: true,
+            formateur: expect.objectContaining({
+              select: expect.objectContaining({ avatar: true }),
+            }),
+            _count: expect.objectContaining({ select: expect.objectContaining({ enrollments: true, modules: true }) }),
+          }),
+        }),
+      );
+    });
   });
 
   // ─── findOne ──────────────────────────────────────────────────────────────
