@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 import { Level } from '@prisma/client';
 
 export type CourseSortField = 'createdAt' | 'price' | 'title';
@@ -7,6 +7,7 @@ export type CourseSortField = 'createdAt' | 'price' | 'title';
 export class CourseListQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @IsOptional()
@@ -15,16 +16,21 @@ export class CourseListQueryDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   category?: string;
 
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   @Min(0)
+  @Max(1_000_000)
   minPrice?: number;
 
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   @Min(0)
+  @Max(1_000_000)
   maxPrice?: number;
 
   @IsOptional()

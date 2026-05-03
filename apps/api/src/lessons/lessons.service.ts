@@ -22,12 +22,16 @@ export class LessonsService {
     return this.prisma.lesson.findMany({
       where: { moduleId },
       orderBy: { order: 'asc' },
+      select: { id: true, title: true, type: true, order: true },
     });
   }
 
   async findOne(id: string) {
-    const lesson = await this.prisma.lesson.findUnique({ where: { id } });
-    if (!lesson) throw new NotFoundException(`Lesson ${id} not found`);
+    const lesson = await this.prisma.lesson.findUnique({
+      where: { id },
+      select: { id: true, title: true, type: true, order: true, moduleId: true },
+    });
+    if (!lesson) throw new NotFoundException();
     return lesson;
   }
 
@@ -52,7 +56,7 @@ export class LessonsService {
       where: { id: moduleId },
       include: { course: { select: { formateurId: true } } },
     });
-    if (!mod) throw new NotFoundException(`Module ${moduleId} not found`);
+    if (!mod) throw new NotFoundException();
     if (mod.course.formateurId !== formateurId) {
       throw new ForbiddenException('You are not the owner of this course');
     }
@@ -67,7 +71,7 @@ export class LessonsService {
         },
       },
     });
-    if (!lesson) throw new NotFoundException(`Lesson ${id} not found`);
+    if (!lesson) throw new NotFoundException();
     return lesson;
   }
 }

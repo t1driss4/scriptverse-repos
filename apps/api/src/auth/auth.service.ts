@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
@@ -16,28 +16,41 @@ const SALT_ROUNDS = 10;
 
 @Injectable()
 export class AuthService {
+  private readonly accessSecret: string;
+  private readonly refreshSecret: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
-  ) {}
+  ) {
+    const accessSecret = process.env.JWT_ACCESS_SECRET;
+    const refreshSecret = process.env.JWT_REFRESH_SECRET;
+    if (!accessSecret) throw new Error('JWT_ACCESS_SECRET is not set');
+    if (!refreshSecret) throw new Error('JWT_REFRESH_SECRET is not set');
+    this.accessSecret = accessSecret;
+    this.refreshSecret = refreshSecret;
+  }
 
   // ─── Signup ──────────────────────────────────────────────────────────────────
 
   async signup(dto: SignupDto) {
-    const exists = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
-    if (exists) throw new ConflictException('Email already registered');
-
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        passwordHash,
-        role: dto.role ?? Role.APPRENANT,
-      },
-    });
+    let user;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email: dto.email,
+          passwordHash,
+          role: dto.role ?? Role.APPRENANT,
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException('Email already registered');
+      }
+      throw e;
+    }
 
     const tokens = await this.issueTokens(user.id, user.email, user.role);
     await this.storeRefreshHash(user.id, tokens.refreshToken);
@@ -111,11 +124,11 @@ export class AuthService {
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
-        secret: process.env.JWT_ACCESS_SECRET,
+        secret: this.accessSecret,
         expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
       }),
       this.jwtService.signAsync(payload, {
-        secret: process.env.JWT_REFRESH_SECRET,
+        secret: this.refreshSecret,
         expiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
       }),
     ]);

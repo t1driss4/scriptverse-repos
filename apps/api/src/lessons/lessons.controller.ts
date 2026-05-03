@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -29,7 +30,7 @@ export class LessonsController {
   @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   create(
-    @Param('moduleId') moduleId: string,
+    @Param('moduleId', ParseUUIDPipe) moduleId: string,
     @GetUser('sub') userId: string,
     @Body() dto: CreateLessonDto,
   ) {
@@ -39,14 +40,14 @@ export class LessonsController {
   /** List all lessons for a module */
   @Public()
   @Get('modules/:moduleId/lessons')
-  findByModule(@Param('moduleId') moduleId: string) {
+  findByModule(@Param('moduleId', ParseUUIDPipe) moduleId: string) {
     return this.lessonsService.findByModule(moduleId);
   }
 
   /** Get a single lesson */
   @Public()
   @Get('lessons/:id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.lessonsService.findOne(id);
   }
 
@@ -55,7 +56,7 @@ export class LessonsController {
   @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @GetUser('sub') userId: string,
     @Body() dto: UpdateLessonDto,
   ) {
@@ -67,7 +68,7 @@ export class LessonsController {
   @UseGuards(RolesGuard)
   @Roles(Role.FORMATEUR)
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id') id: string, @GetUser('sub') userId: string) {
+  remove(@Param('id', ParseUUIDPipe) id: string, @GetUser('sub') userId: string) {
     return this.lessonsService.remove(id, userId);
   }
 }

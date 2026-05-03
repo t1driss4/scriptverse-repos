@@ -143,6 +143,24 @@ apps/api/src/
 │   └── dto/
 │       └── update-role.dto.ts               # { role: Role }
 │
+├── quiz/
+│   ├── quiz.controller.ts                   # 8 handlers — FORMATEUR CRUD + authenticated attempts
+│   ├── quiz.controller.spec.ts              # 19 tests — delegation + @Roles/@Public metadata assertions
+│   ├── quiz.module.ts                       # NestJS module — registered in AppModule
+│   ├── quiz.service.ts                      # Business logic + assertModuleOwner helper
+│   ├── quiz.service.spec.ts                 # 47 tests — all error branches + score logic
+│   └── dto/
+│       ├── create-quiz.dto.ts               # { title: string }
+│       ├── create-quiz.dto.spec.ts
+│       ├── update-quiz.dto.ts               # { title?: string }
+│       ├── update-quiz.dto.spec.ts
+│       ├── create-question.dto.ts           # { question, options[], correctAnswer, order }
+│       ├── create-question.dto.spec.ts
+│       ├── update-question.dto.ts           # All fields optional
+│       ├── update-question.dto.spec.ts
+│       ├── submit-attempt.dto.ts            # { answers: number[] }
+│       └── submit-attempt.dto.spec.ts
+│
 └── prisma/
     ├── prisma.module.ts                     # @Global() module — exports PrismaService
     └── prisma.service.ts                    # PrismaClient lifecycle (onModuleInit / onModuleDestroy)
@@ -299,6 +317,15 @@ explicitly per controller/handler where role enforcement is needed.
 | `GET  /enrollments/mine/:courseId`      | —       | —          | authenticated              |
 | `GET  /admin/users`                     | —       | ✓          | `ADMIN`                    |
 | `PATCH /admin/users/:id/role`           | —       | ✓          | `ADMIN`                    |
+| `POST /modules/:moduleId/quiz`          | —       | ✓          | `FORMATEUR` (course owner) |
+| `GET  /modules/:moduleId/quiz`          | ✓       | —          | public (no `correctAnswer`) |
+| `PATCH /modules/:moduleId/quiz`         | —       | ✓          | `FORMATEUR` (course owner) |
+| `DELETE /modules/:moduleId/quiz`        | —       | ✓          | `FORMATEUR` (course owner) |
+| `POST /modules/:moduleId/quiz/questions`| —       | ✓          | `FORMATEUR` (course owner) |
+| `PATCH /modules/:moduleId/quiz/questions/:questionId` | — | ✓ | `FORMATEUR` (course owner) |
+| `DELETE /modules/:moduleId/quiz/questions/:questionId`| — | ✓ | `FORMATEUR` (course owner) |
+| `POST /modules/:moduleId/quiz/attempts` | —       | —          | authenticated — submit answers → score + corrections |
+| `GET  /modules/:moduleId/quiz/attempts` | —       | —          | authenticated — personal attempt history |
 
 ---
 
@@ -1361,3 +1388,1025 @@ Empty results return `200` with an empty array — never `404`.
 - **Handler ordering in controller** — `GET /courses` (literal) is declared before
   `GET /courses/:id` (param) to prevent NestJS from capturing `"courses"` as the `:id`
   segment in edge-case routing.
+
+---
+
+---
+
+# Feature: API — Quiz (Questions + Tentative + Score)
+
+---
+
+## 43. Overview (As Built)
+
+This feature implements a unified `QuizModule` covering four sub-features:
+
+1. **Questions (public)** — `GET /modules/:moduleId/quiz` returns quiz metadata and the
+   ordered question list with `correctAnswer` deliberately excluded via Prisma `select`.
+2. **FORMATEUR authoring** — `POST/PATCH/DELETE /modules/:moduleId/quiz` and question
+   sub-routes allow formatters to create, update, and delete quizzes and questions.
+3. **Attempt submission** — `POST /modules/:moduleId/quiz/attempts` accepts the learner's
+   answer indices, computes the score server-side (`Math.round(correct / total * 100)`),
+   persists a `QuizAttempt` row, and returns per-question corrections.
+4. **Attempt history** — `GET /modules/:moduleId/quiz/attempts` returns the authenticated
+   user's past attempts (score summaries, descending by date).
+
+All routes are nested under `/modules/:moduleId/quiz`. **No enrollment check is imposed
+on attempt submission** — any authenticated user may attempt a quiz for a module they can
+see. Guards handle authentication; `assertModuleOwner` (a private service helper) is used
+only for FORMATEUR write operations.
+
+No schema changes are required.
+
+---
+
+## 44. Endpoints (As Built)
+
+| Method   | Route                                         | Auth / Guard                          | Purpose                                             |
+|----------|-----------------------------------------------|---------------------------------------|-----------------------------------------------------|
+| `POST`   | `/modules/:moduleId/quiz`                     | `@Roles(FORMATEUR)` + `RolesGuard`    | Create quiz for a module (one per module)           |
+| `GET`    | `/modules/:moduleId/quiz`                     | `@Public()`                           | Quiz detail with questions (no `correctAnswer`)     |
+| `PATCH`  | `/modules/:moduleId/quiz`                     | `@Roles(FORMATEUR)` + `RolesGuard`    | Update quiz metadata                                |
+| `DELETE` | `/modules/:moduleId/quiz`                     | `@Roles(FORMATEUR)` + `RolesGuard`    | Delete quiz and all questions                       |
+| `POST`   | `/modules/:moduleId/quiz/questions`           | `@Roles(FORMATEUR)` + `RolesGuard`    | Add question to quiz                                |
+| `PATCH`  | `/modules/:moduleId/quiz/questions/:questionId` | `@Roles(FORMATEUR)` + `RolesGuard`  | Update a question                                   |
+| `DELETE` | `/modules/:moduleId/quiz/questions/:questionId` | `@Roles(FORMATEUR)` + `RolesGuard`  | Remove a question                                   |
+| `POST`   | `/modules/:moduleId/quiz/attempts`            | `JwtAccessGuard` (global)             | Submit answers → score + corrections                |
+| `GET`    | `/modules/:moduleId/quiz/attempts`            | `JwtAccessGuard` (global)             | Past attempts for authenticated user                |
+
+---
+
+## 45. Folder Structure (As Built)
+
+```
+apps/api/src/
+│
+└── quiz/
+    ├── quiz.controller.ts           # 9 route handlers
+    ├── quiz.controller.spec.ts      # 19 tests (delegation + decorator metadata)
+    ├── quiz.module.ts               # @Module({ imports: [PrismaModule], … })
+    ├── quiz.service.ts              # Business logic
+    ├── quiz.service.spec.ts         # 47 tests across 8 describe blocks
+    └── dto/
+        ├── create-quiz.dto.ts
+        ├── update-quiz.dto.ts
+        ├── create-question.dto.ts
+        ├── update-question.dto.ts
+        └── submit-attempt.dto.ts
+```
+
+`QuizModule` is registered in `AppModule`. It imports `PrismaModule` for the shared
+`PrismaService`.
+
+---
+
+## 46. DTOs (As Built)
+
+### Submit Attempt — `submit-attempt.dto.ts`
+
+```typescript
+export class SubmitAttemptDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  answers!: number[];   // one 0-based index per question, positional
+}
+```
+
+### `submitAttempt` response shape
+
+```typescript
+{
+  attemptId:      string;    // QuizAttempt UUID
+  score:          number;    // 0–100 integer (Math.round)
+  totalQuestions: number;
+  correctCount:   number;
+  completedAt:    string;    // ISO 8601
+  corrections: {
+    questionId:    string;
+    yourAnswer:    number;
+    correctAnswer: number;
+    isCorrect:     boolean;
+  }[];
+}
+```
+
+### `getMyAttempts` response shape (list item)
+
+```typescript
+{
+  id:          string;
+  score:       number;
+  answers:     number[];
+  completedAt: Date;
+}[]
+```
+
+---
+
+## 47. Service (As Built)
+
+### Private helper: `assertModuleOwner`
+
+Resolves `module → course → formateurId` in one Prisma query and throws
+`NotFoundException` (module absent) or `ForbiddenException` (not the owner) as
+appropriate.
+
+```typescript
+private async assertModuleOwner(moduleId: string, formateurId: string): Promise<void> {
+  const module = await this.prisma.module.findUnique({
+    where: { id: moduleId },
+    include: { course: { select: { formateurId: true } } },
+  });
+  if (!module) throw new NotFoundException('Module not found');
+  if (module.course.formateurId !== formateurId)
+    throw new ForbiddenException('Not the owner of this module');
+}
+```
+
+### `submitAttempt` score logic
+
+1. Verify quiz exists (`NotFoundException` if absent).
+2. Load questions ordered by `order asc`.
+3. Validate `answers.length === questions.length` (`BadRequestException`).
+4. Validate each answer index is in `[0, options.length)` (`BadRequestException`).
+5. Count correct answers; `score = Math.round(correctCount / total * 100)`.
+6. Persist `QuizAttempt` via `prisma.quizAttempt.create`.
+7. Return `{ attemptId, score, totalQuestions, correctCount, completedAt, corrections }`.
+
+---
+
+## 48. RBAC Matrix (As Built)
+
+| Route                                            | Public? | RolesGuard | Required Role   |
+|--------------------------------------------------|---------|------------|-----------------|
+| `GET  /modules/:moduleId/quiz`                   | ✓       | —          | —               |
+| `POST /modules/:moduleId/quiz`                   | —       | ✓          | FORMATEUR       |
+| `PATCH /modules/:moduleId/quiz`                  | —       | ✓          | FORMATEUR       |
+| `DELETE /modules/:moduleId/quiz`                 | —       | ✓          | FORMATEUR       |
+| `POST /modules/:moduleId/quiz/questions`         | —       | ✓          | FORMATEUR       |
+| `PATCH /modules/:moduleId/quiz/questions/:id`    | —       | ✓          | FORMATEUR       |
+| `DELETE /modules/:moduleId/quiz/questions/:id`   | —       | ✓          | FORMATEUR       |
+| `POST /modules/:moduleId/quiz/attempts`          | —       | —          | authenticated   |
+| `GET  /modules/:moduleId/quiz/attempts`          | —       | —          | authenticated   |
+
+---
+
+## 49. Error Handling (As Built)
+
+| Condition                                              | HTTP Status | Message                                      |
+|--------------------------------------------------------|-------------|----------------------------------------------|
+| Module not found                                       | `404`       | `Module not found`                           |
+| FORMATEUR not owner of the module                      | `403`       | `Not the owner of this module`               |
+| Module already has a quiz                              | `400`       | `This module already has a quiz`             |
+| Quiz not found for module                              | `404`       | (NestJS default NotFoundException)           |
+| `answers.length` ≠ `questions.length`                  | `400`       | `Expected N answers, received M`             |
+| Answer index out of range for a question               | `400`       | `Answer index X out of range for question Y` |
+| Not authenticated on attempt routes                    | `401`       | (JwtAccessGuard default)                     |
+
+---
+
+## 50. Key Design Invariants (As Built)
+
+- **`correctAnswer` excluded before submission** — `findByModule` uses a Prisma `select`
+  to omit `correctAnswer` from question payloads; the field is only returned in `corrections`
+  after a successful attempt.
+- **Score is integer-rounded server-side** — `Math.round(correctCount / total * 100)`;
+  never delegated to the client.
+- **Structural validation is strict** — `answers.length` must equal `questions.length`,
+  and each index must be in `[0, options.length)`. Both checks throw `BadRequestException`
+  before any DB write.
+- **Multiple attempts are allowed** — no unique constraint on `(userId, quizId)` in
+  `QuizAttempt`. The `getMyAttempts` endpoint returns all past attempts sorted
+  `completedAt desc`.
+- **No enrollment check on attempts** — unlike the courses content endpoint, attempt
+  submission does not gate on enrollment. Any authenticated user may attempt a quiz.
+- **`assertModuleOwner` is a mutualized helper** — reused across all FORMATEUR write
+  operations (quiz CRUD + question CRUD) to avoid duplicating the
+  `module → course → formateurId` traversal.
+
+---
+
+# Feature: Front — Espace Formateur (CRUD Cours / Chapitres / Quiz)
+
+---
+
+## 55. Overview
+
+The instructor workspace gives FORMATEUR-role users a full authoring interface to:
+
+- View and manage their own courses (list, create, publish, delete)
+- Edit course structure — modules and lessons in a hierarchical accordion
+- Author quizzes attached to specific modules (questions, options, correct answer)
+
+**Scope of this feature**
+
+| Area | Current State | Target State |
+|---|---|---|
+| `/formateur` dashboard | Mock data, non-functional actions | Real `GET /courses/mine`, working publish/delete |
+| `/formateur/cours/nouveau` | Page does not exist | New course creation form |
+| `/formateur/cours/[id]` | Mock data, flat lesson list, no quiz editor | Real API, module → lessons hierarchy, quiz CRUD |
+| Layout role guard | Missing | `layout.tsx` blocking non-FORMATEUR/ADMIN |
+| API layer | No quiz/question management calls | `quizzesManagementApi` + `questionsApi` added |
+| Backend quiz endpoints | Learner-only (GET, attempts) | New FORMATEUR CRUD endpoints required |
+
+**Dependency**: sections §56 specifies the backend endpoints that must exist before
+the frontend quiz editor can be wired. Frontend stub data should be used only while
+those endpoints are pending, and replaced atomically once they ship.
+
+---
+
+## 56. Backend Gaps — New API Endpoints Required
+
+The following FORMATEUR quiz/question management endpoints are **already implemented**
+in `src/quiz/` (see §67) using module-context routing. However, the routes implemented
+differ from the quiz-id-based paths assumed by the frontend API layer in §61.2.
+This routing gap must be resolved before the frontend quiz editor can call real API
+routes — either by adding quiz-id-based aliases to `QuizModule`, or by updating the
+frontend API layer to match the module-nested paths.
+
+### 56.1 Quiz management
+
+| Method | Route | Guard | Description |
+|--------|-------|-------|-------------|
+| `POST` | `/modules/:moduleId/quiz` | JWT + FORMATEUR/ADMIN | Create quiz for a module |
+| `PATCH` | `/quizzes/:id` | JWT + FORMATEUR/ADMIN | Update quiz metadata (title) |
+| `DELETE` | `/quizzes/:id` | JWT + FORMATEUR/ADMIN | Delete quiz and all questions |
+
+**Ownership rule** (applied in service before any write):
+
+```typescript
+// QuizzesService
+private async assertOwnership(quizId: string, userId: string): Promise<void> {
+  const quiz = await this.prisma.quiz.findUnique({
+    where: { id: quizId },
+    select: { module: { select: { course: { select: { formateurId: true } } } } },
+  });
+  if (!quiz) throw new NotFoundException();
+  if (quiz.module.course.formateurId !== userId) throw new ForbiddenException();
+}
+```
+
+**DTOs**:
+
+```typescript
+// CreateQuizDto
+class CreateQuizDto {
+  @IsString() @IsNotEmpty()
+  title: string;
+}
+
+// UpdateQuizDto
+class UpdateQuizDto {
+  @IsString() @IsNotEmpty() @IsOptional()
+  title?: string;
+}
+```
+
+**Response**: `QuizDetailDto` (same shape as `GET /quizzes/:id`, `correctAnswer` included
+for FORMATEUR — unlike the learner view that strips it).
+
+### 56.2 Question management
+
+| Method | Route | Guard | Description |
+|--------|-------|-------|-------------|
+| `POST` | `/quizzes/:id/questions` | JWT + FORMATEUR/ADMIN | Add question to quiz |
+| `PATCH` | `/questions/:id` | JWT + FORMATEUR/ADMIN | Update question |
+| `DELETE` | `/questions/:id` | JWT + FORMATEUR/ADMIN | Remove question |
+
+**DTOs**:
+
+```typescript
+// CreateQuestionDto
+class CreateQuestionDto {
+  @IsString() @IsNotEmpty()
+  question: string;
+
+  @IsArray() @ArrayMinSize(2) @IsString({ each: true })
+  options: string[];
+
+  @IsInt() @Min(0)
+  correctAnswer: number;  // index into options[]
+
+  @IsInt() @Min(1)
+  order: number;
+}
+
+// UpdateQuestionDto — all fields optional
+class UpdateQuestionDto extends PartialType(CreateQuestionDto) {}
+```
+
+**Ownership traversal for questions**: `QuizQuestion → Quiz → Module → Course → formateurId`.
+
+### 56.3 Module endpoint for `POST /modules/:moduleId/quiz`
+
+The existing `ModulesController` must add one route. Delegate to `QuizzesService`:
+
+```typescript
+// modules.controller.ts (addition only)
+@Post(':moduleId/quiz')
+@UseGuards(JwtAccessGuard, RolesGuard)
+@Roles(Role.FORMATEUR, Role.ADMIN)
+createQuiz(
+  @GetUser('sub') userId: string,
+  @Param('moduleId') moduleId: string,
+  @Body() dto: CreateQuizDto,
+) {
+  return this.quizzesService.createForModule(moduleId, userId, dto);
+}
+```
+
+---
+
+## 57. Frontend Route Structure
+
+```
+apps/web/src/app/formateur/
+├── layout.tsx                  ← NEW: role guard (client component)
+├── page.tsx                    ← REFACTOR: replace mock with real API
+├── cours/
+│   ├── nouveau/
+│   │   └── page.tsx            ← NEW: create course form
+│   └── [id]/
+│       └── page.tsx            ← REFACTOR: module hierarchy + quiz editor
+```
+
+**Routing note**: `nouveau` is a static segment. In Next.js App Router, static segments
+resolve before dynamic `[id]` segments, so `/formateur/cours/nouveau` never collides with
+`/formateur/cours/[id]`.
+
+---
+
+## 58. Formateur Layout — Role Guard
+
+```tsx
+// apps/web/src/app/formateur/layout.tsx
+'use client';
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/auth-context';
+
+export default function FormateurLayout({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (!user || (user.role !== 'FORMATEUR' && user.role !== 'ADMIN')) {
+      router.replace('/');
+    }
+  }, [user, isLoading, router]);
+
+  if (isLoading || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (user.role !== 'FORMATEUR' && user.role !== 'ADMIN') {
+    return null;  // redirect in flight
+  }
+
+  return <>{children}</>;
+}
+```
+
+**Design constraints**:
+- Uses `useAuth()` from `context/auth-context.tsx` (existing context, no new state dependency)
+- Shows a spinner while `isLoading` to prevent flash-of-unauthorized-content
+- `router.replace('/')` avoids polluting the browser history stack
+- Does **not** use Next.js Middleware — the guard lives entirely in React to stay consistent
+  with the existing client-side auth pattern
+
+---
+
+## 59. Pages
+
+### 59.1 Dashboard — `/formateur`
+
+**Replace** mock data wiring with real API calls.
+
+```tsx
+// Simplified data-fetching pattern (inside the page component)
+const { data: courses, mutate } = useFormateurCourses();
+// useFormateurCourses wraps coursesApi.findMine() — see §62
+```
+
+**Actions**:
+
+| Action | API call | Optimistic update |
+|--------|----------|-------------------|
+| Publish / Unpublish | `PATCH /courses/:id { published: !course.published }` | Toggle badge immediately, rollback on error |
+| Delete | `DELETE /courses/:id` | Remove row immediately, rollback on error |
+| Create new | Navigate to `/formateur/cours/nouveau` | — |
+
+**UI additions** over current mock state:
+- Empty state when `courses.length === 0`: CTA card linking to `/formateur/cours/nouveau`
+- Loading skeleton (3 placeholder rows) while fetching
+- Per-row error toast on failed publish/delete
+
+### 59.2 Create Course — `/formateur/cours/nouveau`
+
+**New page** — does not exist yet.
+
+```tsx
+// apps/web/src/app/formateur/cours/nouveau/page.tsx (shape only)
+export default function NouveauCoursPage() {
+  // CourseForm handles field state and validation
+  // On submit: coursesApi.create() → redirect to /formateur/cours/[id]
+}
+```
+
+**Form fields** (align with `CreateCourseDto`):
+
+| Field | Type | Validation |
+|-------|------|------------|
+| `title` | text | required, 3–120 chars |
+| `description` | textarea | required, 10–2000 chars |
+| `level` | select (`DEBUTANT` / `INTERMEDIAIRE` / `AVANCE`) | required |
+| `price` | number | ≥ 0 |
+| `imageUrl` | text | optional, valid URL |
+
+On successful `POST /courses`, redirect to `/formateur/cours/[newId]` so the instructor
+can immediately add modules.
+
+### 59.3 Course Editor — `/formateur/cours/[id]`
+
+**Refactor** the existing page. Key structural changes:
+
+1. **Module hierarchy** — replace the flat `allLessons` list with a `ModuleAccordion` per
+   module. Each accordion panel contains an ordered `LessonRow` list plus a "Add lesson"
+   button.
+2. **Inline module editing** — click a module name to open `ModuleForm` in-place.
+3. **Quiz editor panel** — each module accordion has a "Quiz" tab (or sub-panel) that
+   renders `QuizEditor` when a quiz exists, or an "Add quiz" button when it does not.
+4. **Real API wiring** — all reads and writes go through the hooks defined in §62.
+
+**Page layout**:
+
+```
+┌──────────────────────────────────────────────────────┐
+│  ← Back   Course Title (editable)           [Publish]│
+├──────────────────────────────────────────────────────┤
+│  Left column (2/3)          │  Right column (1/3)    │
+│                             │                        │
+│  CourseForm (metadata)      │  PublishChecklist      │
+│                             │  DangerZone (delete)   │
+│  [+ Add Module]             │                        │
+│                             │                        │
+│  ModuleAccordion #1         │                        │
+│    LessonRow · LessonRow    │                        │
+│    [+ Add Lesson]           │                        │
+│    ── Quiz tab ──           │                        │
+│    QuizEditor               │                        │
+│                             │                        │
+│  ModuleAccordion #2         │                        │
+│  …                          │                        │
+└──────────────────────────────────────────────────────┘
+```
+
+---
+
+## 60. Component Architecture
+
+All new components live under `apps/web/src/components/formateur/`.
+
+### 60.1 Component inventory
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| `CourseForm` | `course-form.tsx` | Metadata fields (title, description, level, price, imageUrl). Controlled; receives `defaultValues` and `onSave`. |
+| `ModuleAccordion` | `module-accordion.tsx` | Collapsible panel per module. Renders ordered `LessonRow` list + `QuizEditor`. Drag-to-reorder future hook. |
+| `ModuleForm` | `module-form.tsx` | Inline edit for module title and order. Shown on click within `ModuleAccordion` header. |
+| `LessonRow` | `lesson-row.tsx` | Single lesson row with expand-to-edit, type badge, drag handle. Extracted from existing inline component in `[id]/page.tsx`. |
+| `LessonForm` | `lesson-form.tsx` | Fields: title, type (VIDEO/ARTICLE/QUIZ), content, duration, order. |
+| `QuizEditor` | `quiz-editor.tsx` | Manages quiz title + ordered list of `QuestionCard`. "Add question" appends a blank card. |
+| `QuestionCard` | `question-card.tsx` | Single question: question text, 2–6 option inputs, correct-answer radio, order. |
+| `PublishChecklist` | `publish-checklist.tsx` | Derived from course data: checks title, ≥1 module, ≥1 lesson, ≥1 published lesson. |
+| `DeleteConfirmDialog` | `delete-confirm-dialog.tsx` | Modal asking for course title re-entry before hard delete. Prevents accidental deletion. |
+
+### 60.2 Component contracts
+
+```tsx
+// CourseForm
+interface CourseFormProps {
+  defaultValues: Partial<CoursePayload>;
+  onSave: (data: CoursePayload) => Promise<void>;
+  isSaving?: boolean;
+}
+
+// ModuleAccordion
+interface ModuleAccordionProps {
+  module: CourseModule;
+  quiz: Quiz | null;
+  onModuleUpdate: (id: string, data: Partial<ModulePayload>) => Promise<void>;
+  onModuleDelete: (id: string) => Promise<void>;
+  onLessonCreate: (moduleId: string, data: LessonPayload) => Promise<void>;
+  onLessonUpdate: (id: string, data: Partial<LessonPayload>) => Promise<void>;
+  onLessonDelete: (id: string) => Promise<void>;
+  onQuizCreate: (moduleId: string, data: CreateQuizPayload) => Promise<void>;
+  onQuizUpdate: (id: string, data: Partial<CreateQuizPayload>) => Promise<void>;
+  onQuizDelete: (id: string) => Promise<void>;
+  onQuestionCreate: (quizId: string, data: CreateQuestionPayload) => Promise<void>;
+  onQuestionUpdate: (id: string, data: Partial<CreateQuestionPayload>) => Promise<void>;
+  onQuestionDelete: (id: string) => Promise<void>;
+}
+
+// QuizEditor
+interface QuizEditorProps {
+  quiz: Quiz | null;
+  moduleId: string;
+  onQuizCreate: (moduleId: string, data: CreateQuizPayload) => Promise<void>;
+  onQuizUpdate: (id: string, data: Partial<CreateQuizPayload>) => Promise<void>;
+  onQuizDelete: (id: string) => Promise<void>;
+  onQuestionCreate: (quizId: string, data: CreateQuestionPayload) => Promise<void>;
+  onQuestionUpdate: (id: string, data: Partial<CreateQuestionPayload>) => Promise<void>;
+  onQuestionDelete: (id: string) => Promise<void>;
+}
+
+// QuestionCard
+interface QuestionCardProps {
+  question: QuizQuestion;
+  index: number;
+  onUpdate: (id: string, data: Partial<CreateQuestionPayload>) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+}
+```
+
+---
+
+## 61. API Layer Additions
+
+### 61.1 New payload types (`apps/web/src/lib/types.ts`)
+
+```typescript
+// Add moduleId to Quiz (was missing)
+interface Quiz {
+  id: string;
+  moduleId: string;   // ← added
+  title: string;
+  questions: QuizQuestion[];
+}
+
+// Add quizId to QuizQuestion (was missing)
+interface QuizQuestion {
+  id: string;
+  quizId: string;     // ← added
+  question: string;
+  options: string[];
+  correctAnswer: number;
+  order: number;
+}
+
+// New payload types
+interface CreateQuizPayload {
+  title: string;
+}
+
+interface CreateQuestionPayload {
+  question: string;
+  options: string[];
+  correctAnswer: number;
+  order: number;
+}
+```
+
+### 61.2 New API objects (`apps/web/src/lib/api.ts`)
+
+```typescript
+export const quizzesManagementApi = {
+  createForModule(token: string, moduleId: string, data: CreateQuizPayload) {
+    return request<Quiz>(`/modules/${moduleId}/quiz`, {
+      method: 'POST',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+  update(token: string, quizId: string, data: Partial<CreateQuizPayload>) {
+    return request<Quiz>(`/quizzes/${quizId}`, {
+      method: 'PATCH',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+  remove(token: string, quizId: string) {
+    return request<void>(`/quizzes/${quizId}`, {
+      method: 'DELETE',
+      headers: bearer(token),
+    });
+  },
+};
+
+export const questionsApi = {
+  create(token: string, quizId: string, data: CreateQuestionPayload) {
+    return request<QuizQuestion>(`/quizzes/${quizId}/questions`, {
+      method: 'POST',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+  update(token: string, questionId: string, data: Partial<CreateQuestionPayload>) {
+    return request<QuizQuestion>(`/questions/${questionId}`, {
+      method: 'PATCH',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+  remove(token: string, questionId: string) {
+    return request<void>(`/questions/${questionId}`, {
+      method: 'DELETE',
+      headers: bearer(token),
+    });
+  },
+};
+```
+
+---
+
+## 62. Custom Hooks
+
+All hooks live under `apps/web/src/hooks/`.
+
+### 62.1 `use-formateur-courses.ts`
+
+```typescript
+// Fetches the authenticated formateur's own courses.
+// Provides optimistic mutation helpers for publish and delete.
+
+interface UseFormateurCoursesReturn {
+  courses: Course[];
+  isLoading: boolean;
+  error: string | null;
+  publishCourse: (id: string, published: boolean) => Promise<void>;
+  deleteCourse: (id: string) => Promise<void>;
+}
+
+export function useFormateurCourses(): UseFormateurCoursesReturn
+```
+
+**Implementation notes**:
+- Reads token from `getAccessToken()` (auth-storage)
+- On mount, calls `coursesApi.findMine(token)` and stores in local state
+- `publishCourse`: snapshot → optimistic toggle → `PATCH /courses/:id` → rollback on error
+- `deleteCourse`: snapshot → optimistic remove → `DELETE /courses/:id` → rollback on error
+
+### 62.2 `use-course-editor.ts`
+
+```typescript
+// Manages full course editor state: metadata, modules, lessons.
+
+interface UseCourseEditorReturn {
+  course: Course | null;
+  isLoading: boolean;
+  error: string | null;
+  saveCourse: (data: Partial<CoursePayload>) => Promise<void>;
+  publishCourse: (published: boolean) => Promise<void>;
+  deleteCourse: () => Promise<void>;
+  createModule: (data: ModulePayload) => Promise<void>;
+  updateModule: (id: string, data: Partial<ModulePayload>) => Promise<void>;
+  deleteModule: (id: string) => Promise<void>;
+  createLesson: (moduleId: string, data: LessonPayload) => Promise<void>;
+  updateLesson: (id: string, data: Partial<LessonPayload>) => Promise<void>;
+  deleteLesson: (id: string) => Promise<void>;
+}
+
+export function useCourseEditor(courseId: string): UseCourseEditorReturn
+```
+
+**Implementation notes**:
+- Initial load: parallel fetch of `coursesApi.findOne(courseId)` +
+  `modulesApi.findByCourse(courseId)` + lessons per module
+- Holds full course tree in a single `useState<Course>` (modules nested with lessons)
+- Each mutation: snapshot full state → optimistic update → API call → rollback on error
+
+### 62.3 `use-quiz-editor.ts`
+
+```typescript
+// Manages quiz + questions for a single module.
+
+interface UseQuizEditorReturn {
+  quiz: Quiz | null;
+  isSaving: boolean;
+  createQuiz: (moduleId: string, data: CreateQuizPayload) => Promise<void>;
+  updateQuiz: (data: Partial<CreateQuizPayload>) => Promise<void>;
+  deleteQuiz: () => Promise<void>;
+  addQuestion: (data: CreateQuestionPayload) => Promise<void>;
+  updateQuestion: (id: string, data: Partial<CreateQuestionPayload>) => Promise<void>;
+  removeQuestion: (id: string) => Promise<void>;
+}
+
+export function useQuizEditor(initialQuiz: Quiz | null): UseQuizEditorReturn
+```
+
+**Implementation notes**:
+- `addQuestion` appends a new `QuizQuestion` optimistically then calls
+  `questionsApi.create()`. On error, reverts to snapshot.
+- `removeQuestion` removes the question and re-normalises `order` fields (1-based
+  sequential) both optimistically and after the confirmed server response.
+- `deleteQuiz` calls `quizzesManagementApi.remove()` then sets local `quiz` to `null`.
+
+---
+
+## 63. State Management Pattern
+
+The instructor workspace uses **local React state only** — no external store. This aligns
+with the existing app-wide pattern (Context API for auth, local state for page data).
+
+### 63.1 Optimistic update pattern
+
+Replicated from the learner-facing pages (existing convention):
+
+```typescript
+async function optimisticMutation<T>(
+  snapshot: T,
+  applyOptimistic: () => void,
+  apiCall: () => Promise<unknown>,
+  rollback: (snapshot: T) => void,
+  onError?: (err: unknown) => void,
+): Promise<void> {
+  applyOptimistic();
+  try {
+    await apiCall();
+  } catch (err) {
+    rollback(snapshot);
+    onError?.(err);
+  }
+}
+```
+
+### 63.2 Order normalisation
+
+After any add/delete of a module, lesson, or question, re-index `order` fields to ensure
+they form a continuous 1-based sequence with no gaps:
+
+```typescript
+function normaliseOrder<T extends { order: number }>(items: T[]): T[] {
+  return [...items]
+    .sort((a, b) => a.order - b.order)
+    .map((item, index) => ({ ...item, order: index + 1 }));
+}
+```
+
+This normalisation is applied both to the optimistic local state and dispatched to the
+server via individual `PATCH` calls only when order actually changed.
+
+---
+
+## 64. Updated RBAC Matrix — Frontend Routes
+
+| Route | Allowed roles | Guard mechanism |
+|-------|--------------|-----------------|
+| `/formateur` | `FORMATEUR`, `ADMIN` | `layout.tsx` redirect |
+| `/formateur/cours/nouveau` | `FORMATEUR`, `ADMIN` | Inherited from layout |
+| `/formateur/cours/[id]` | `FORMATEUR`, `ADMIN` | Inherited from layout |
+
+All other routes remain unchanged. The layout guard is the sole enforcement point for the
+`/formateur/*` subtree; individual pages assume the layout has already verified role.
+
+---
+
+## 65. Error Handling
+
+| Scenario | Handling |
+|----------|---------|
+| Expired access token on page load | `api-client.ts` auto-refresh intercept; transparent to page |
+| Refresh token also expired | Redirect to `/connexion?redirect=/formateur/...` |
+| 403 from course/module/lesson API | Toast "Accès refusé" + log; no rollback needed (read-only failure) |
+| 403 on quiz/question write | Toast "Accès refusé" + rollback optimistic state |
+| 404 on course load (`/formateur/cours/[id]`) | Redirect to `/formateur` with "Cours introuvable" toast |
+| Validation error (422) on create/update | Show field-level errors returned by the API below each input |
+| Network error on save | Toast "Erreur réseau, réessayez" + rollback |
+| Delete confirmation mismatch | `DeleteConfirmDialog` keeps submit disabled; no API call fired |
+
+**Toast convention**: use the existing `toast` utility pattern already present in the
+learner-facing pages. Do not add a new notification library.
+
+---
+
+## 66. Key Design Invariants
+
+- **Quiz CRUD backend endpoints exist but have a routing gap** — the seven FORMATEUR
+  quiz/question management endpoints are already implemented in `src/quiz/` (see §67)
+  using module-nested routing (`/modules/:moduleId/quiz/…`). The frontend API layer in
+  §61.2 currently assumes quiz-id-based paths (`PATCH /quizzes/:id`, etc.). This
+  discrepancy must be resolved — either by adding quiz-id-based aliases to `QuizModule`
+  or by updating the frontend API layer to use module-nested paths — before the quiz
+  editor can call real API routes.
+- **Module hierarchy replaces the flat lesson list** — the existing `/formateur/cours/[id]`
+  implementation flattens all lessons from all modules into a single array. This must be
+  replaced entirely; the new data model is `Course → modules[] → lessons[]` with each
+  module rendered as a collapsible accordion.
+- **Layout-level role guard is the single enforcement point** — individual pages under
+  `/formateur/*` must not duplicate the role check. The `layout.tsx` in §58 owns this
+  responsibility.
+- **Optimistic rollback is mandatory for destructive operations** — publish toggles,
+  deletes, and quiz/question removals must snapshot state before the API call and restore
+  on failure. Silent failure is not acceptable.
+- **`nouveau` is a static segment, not a UUID** — it must never be passed as a `courseId`
+  to any API call. The create-course page generates no `courseId` until `POST /courses`
+  succeeds and returns one.
+- **Order is 1-based and gapless after every mutation** — `normaliseOrder()` (§63.2) is
+  called after every add/delete of modules, lessons, and questions. Gaps in `order` cause
+  unpredictable server-side sort results.
+- **`published` defaults to `false` on course creation** — `CourseForm` must not expose
+  a publish toggle; publishing is a deliberate, separate action available only once the
+  course has at least one module and one lesson (enforced by `PublishChecklist`).
+- **Token injection uses `auth-storage.ts`** — all API calls pass the access token
+  obtained from `getAccessToken()`. Pages and hooks must never read `localStorage` directly
+  for the token; they must go through the auth-storage abstraction.
+
+---
+
+## 67. Feature: API — Quiz Management (FORMATEUR CRUD)
+
+### 67.1 Overview
+
+The backend exposes two distinct quiz modules:
+
+| Module | Path prefix | Audience | Status |
+|--------|-------------|----------|--------|
+| `src/quiz/` | `/modules/:moduleId/quiz` | FORMATEUR — create/edit/delete quiz and questions | **Implemented** |
+| `src/quizzes/` | `/quizzes/:quizId` | APPRENANT — view questions, submit attempt, fetch score | Planned (§43–54) |
+
+The split keeps learner-facing and author-facing concerns entirely separate. Both modules are registered in `AppModule`.
+
+### 67.2 Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/modules/:moduleId/quiz` | `FORMATEUR` (course owner) | Create quiz for module |
+| `GET` | `/modules/:moduleId/quiz` | public | Fetch quiz with questions (no `correctAnswer`) |
+| `PATCH` | `/modules/:moduleId/quiz` | `FORMATEUR` (course owner) | Update quiz title |
+| `DELETE` | `/modules/:moduleId/quiz` | `FORMATEUR` (course owner) | Remove quiz and all questions |
+| `POST` | `/modules/:moduleId/quiz/questions` | `FORMATEUR` (course owner) | Add question to quiz |
+| `PATCH` | `/modules/:moduleId/quiz/questions/:questionId` | `FORMATEUR` (course owner) | Update question fields |
+| `DELETE` | `/modules/:moduleId/quiz/questions/:questionId` | `FORMATEUR` (course owner) | Remove question |
+
+**Route discrepancy note**: The §61.2 frontend API layer currently references quiz-id-based paths. Until the gap is resolved, the frontend quiz editor cannot call these routes directly.
+
+### 67.3 Folder Structure
+
+```
+apps/api/src/quiz/
+├── quiz.controller.ts          # 7 endpoints under /modules/:moduleId/quiz
+├── quiz.module.ts              # NestJS module, registered in AppModule
+├── quiz.service.ts             # Business logic + assertModuleOwner guard
+└── dto/
+    ├── create-quiz.dto.ts      # { title: string }
+    ├── update-quiz.dto.ts      # { title?: string }
+    ├── create-question.dto.ts  # { question, options[], correctAnswer, order }
+    └── update-question.dto.ts  # All fields optional
+```
+
+### 67.4 DTOs
+
+```typescript
+// create-quiz.dto.ts
+export class CreateQuizDto {
+  @IsString() @IsNotEmpty() title: string;
+}
+
+// update-quiz.dto.ts
+export class UpdateQuizDto {
+  @IsString() @IsOptional() title?: string;
+}
+
+// create-question.dto.ts
+export class CreateQuestionDto {
+  @IsString() @IsNotEmpty() question: string;
+  @IsArray() @ArrayMinSize(2) @IsString({ each: true }) options: string[];
+  @IsInt() @Min(0) correctAnswer: number;    // index into options[]
+  @IsInt() @Min(1) order: number;
+}
+
+// update-question.dto.ts
+export class UpdateQuestionDto extends PartialType(CreateQuestionDto) {}
+```
+
+### 67.5 Service Methods
+
+```typescript
+// quiz.service.ts (summary)
+
+// Private guard — traverses Module → Course → formateurId
+private async assertModuleOwner(moduleId: string, formateurId: string): Promise<void>
+
+// Quiz CRUD
+async createForModule(moduleId: string, formateurId: string, dto: CreateQuizDto): Promise<Quiz>
+async findByModule(moduleId: string): Promise<Quiz & { questions: QuizQuestion[] }>
+async updateForModule(moduleId: string, formateurId: string, dto: UpdateQuizDto): Promise<Quiz>
+async removeForModule(moduleId: string, formateurId: string): Promise<void>
+
+// Question CRUD
+async addQuestion(moduleId: string, formateurId: string, dto: CreateQuestionDto): Promise<QuizQuestion>
+async updateQuestion(moduleId: string, questionId: string, formateurId: string, dto: UpdateQuestionDto): Promise<QuizQuestion>
+async removeQuestion(moduleId: string, questionId: string, formateurId: string): Promise<void>
+```
+
+`findByModule` deliberately omits `correctAnswer` from the returned questions so the same endpoint is safe for learner use. FORMATEUR responses include `correctAnswer`.
+
+### 67.6 Controller Wiring
+
+```typescript
+@Controller('modules/:moduleId/quiz')
+@UseGuards(JwtAccessGuard)
+export class QuizController {
+  constructor(private readonly quizService: QuizService) {}
+
+  @Post()
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  create(@Param('moduleId') moduleId: string,
+         @GetUser('sub') userId: string,
+         @Body() dto: CreateQuizDto) {
+    return this.quizService.createForModule(moduleId, userId, dto);
+  }
+
+  @Get()
+  @Public()
+  findOne(@Param('moduleId') moduleId: string) {
+    return this.quizService.findByModule(moduleId);
+  }
+
+  @Patch()
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  update(@Param('moduleId') moduleId: string,
+         @GetUser('sub') userId: string,
+         @Body() dto: UpdateQuizDto) {
+    return this.quizService.updateForModule(moduleId, userId, dto);
+  }
+
+  @Delete()
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  remove(@Param('moduleId') moduleId: string,
+         @GetUser('sub') userId: string) {
+    return this.quizService.removeForModule(moduleId, userId);
+  }
+
+  @Post('questions')
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  addQuestion(@Param('moduleId') moduleId: string,
+              @GetUser('sub') userId: string,
+              @Body() dto: CreateQuestionDto) {
+    return this.quizService.addQuestion(moduleId, userId, dto);
+  }
+
+  @Patch('questions/:questionId')
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  updateQuestion(@Param('moduleId') moduleId: string,
+                 @Param('questionId') questionId: string,
+                 @GetUser('sub') userId: string,
+                 @Body() dto: UpdateQuestionDto) {
+    return this.quizService.updateQuestion(moduleId, questionId, userId, dto);
+  }
+
+  @Delete('questions/:questionId')
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  removeQuestion(@Param('moduleId') moduleId: string,
+                 @Param('questionId') questionId: string,
+                 @GetUser('sub') userId: string) {
+    return this.quizService.removeQuestion(moduleId, questionId, userId);
+  }
+}
+```
+
+### 67.7 Module Registration
+
+```typescript
+// quiz.module.ts
+@Module({
+  imports: [PrismaModule],
+  controllers: [QuizController],
+  providers: [QuizService],
+})
+export class QuizModule {}
+```
+
+`QuizModule` is imported in `AppModule` alongside all other feature modules.
+
+### 67.8 Error Handling
+
+| Condition | Exception |
+|-----------|-----------|
+| Module not found | `NotFoundException` |
+| Quiz already exists for module | `ConflictException` (DB unique constraint) |
+| Caller is not the course owner | `ForbiddenException` |
+| Question not found | `NotFoundException` |
+| Quiz not found for module | `NotFoundException` |
+
+### 67.9 Key Design Invariants
+
+- **One quiz per module** — enforced by `Quiz.moduleId @unique` in the Prisma schema. Attempting a second `POST /modules/:moduleId/quiz` throws a `ConflictException`.
+- **`correctAnswer` is FORMATEUR-only in mutation responses** — `findByModule` (the public GET) strips `correctAnswer` before returning. Mutation responses (create/update question) include it for the FORMATEUR making the change.
+- **Ownership is service-level, not guard-level** — `assertModuleOwner` traverses `Module → Course → formateurId` inside the service. Guards only enforce role (`FORMATEUR`); they do not check resource ownership.
+- **Module-nested routing** — all endpoints are nested under `/modules/:moduleId/quiz` rather than under a quiz ID. This means the quiz is always addressed in the context of its module, which aligns with the one-quiz-per-module constraint.
+- **Routing gap with frontend API layer** — the frontend API layer (§61.2) uses quiz-id-based paths. This must be resolved before wiring the quiz editor to real endpoints.

@@ -22,7 +22,12 @@ export class ModulesService {
   async findByCourse(courseId: string) {
     return this.prisma.module.findMany({
       where: { courseId },
-      include: { lessons: { orderBy: { order: 'asc' } } },
+      include: {
+        lessons: {
+          orderBy: { order: 'asc' },
+          select: { id: true, title: true, type: true, order: true },
+        },
+      },
       orderBy: { order: 'asc' },
     });
   }
@@ -30,9 +35,14 @@ export class ModulesService {
   async findOne(id: string) {
     const mod = await this.prisma.module.findUnique({
       where: { id },
-      include: { lessons: { orderBy: { order: 'asc' } } },
+      include: {
+        lessons: {
+          orderBy: { order: 'asc' },
+          select: { id: true, title: true, type: true, order: true },
+        },
+      },
     });
-    if (!mod) throw new NotFoundException(`Module ${id} not found`);
+    if (!mod) throw new NotFoundException();
     return mod;
   }
 
@@ -54,7 +64,7 @@ export class ModulesService {
 
   private async assertCourseOwner(courseId: string, formateurId: string) {
     const course = await this.prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) throw new NotFoundException(`Course ${courseId} not found`);
+    if (!course) throw new NotFoundException();
     if (course.formateurId !== formateurId) {
       throw new ForbiddenException('You are not the owner of this course');
     }
@@ -65,7 +75,7 @@ export class ModulesService {
       where: { id },
       include: { course: { select: { formateurId: true } } },
     });
-    if (!mod) throw new NotFoundException(`Module ${id} not found`);
+    if (!mod) throw new NotFoundException();
     return mod;
   }
 }
