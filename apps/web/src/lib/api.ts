@@ -1,5 +1,5 @@
 import { apiRequest } from './api-client';
-import type { Course, CourseModule, Lesson, Enrollment, EnrollmentProgress } from './types';
+import type { Course, CourseModule, Lesson, Enrollment, EnrollmentProgress, Quiz, QuizQuestion } from './types';
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
@@ -114,6 +114,10 @@ export const coursesApi = {
     return request<Course[]>('/courses/mine', { headers: bearer(token) });
   },
 
+  findMyOne(token: string, id: string) {
+    return request<Course>(`/courses/mine/${id}`, { headers: bearer(token) });
+  },
+
   findOne(id: string) {
     return request<Course>(`/courses/${id}`);
   },
@@ -210,6 +214,73 @@ export const lessonsApi = {
 
   remove(token: string, id: string) {
     return request<void>(`/lessons/${id}`, {
+      method: 'DELETE',
+      headers: bearer(token),
+    });
+  },
+};
+
+// ─────────────────────────────────────────────
+// Quiz API
+// ─────────────────────────────────────────────
+
+export interface QuizPayload {
+  title: string;
+}
+
+export interface QuestionPayload {
+  question: string;
+  options: string[];
+  correctAnswer: number;
+  order: number;
+}
+
+export const quizApi = {
+  findByModule(moduleId: string) {
+    return request<Quiz>(`/modules/${moduleId}/quiz`);
+  },
+
+  create(token: string, moduleId: string, data: QuizPayload) {
+    return request<Quiz>(`/modules/${moduleId}/quiz`, {
+      method: 'POST',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+
+  update(token: string, moduleId: string, data: Partial<QuizPayload>) {
+    return request<Quiz>(`/modules/${moduleId}/quiz`, {
+      method: 'PATCH',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+
+  remove(token: string, moduleId: string) {
+    return request<void>(`/modules/${moduleId}/quiz`, {
+      method: 'DELETE',
+      headers: bearer(token),
+    });
+  },
+
+  addQuestion(token: string, moduleId: string, data: QuestionPayload) {
+    return request<QuizQuestion>(`/modules/${moduleId}/quiz/questions`, {
+      method: 'POST',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateQuestion(token: string, moduleId: string, questionId: string, data: Partial<QuestionPayload>) {
+    return request<QuizQuestion>(`/modules/${moduleId}/quiz/questions/${questionId}`, {
+      method: 'PATCH',
+      headers: bearer(token),
+      body: JSON.stringify(data),
+    });
+  },
+
+  removeQuestion(token: string, moduleId: string, questionId: string) {
+    return request<void>(`/modules/${moduleId}/quiz/questions/${questionId}`, {
       method: 'DELETE',
       headers: bearer(token),
     });

@@ -21,7 +21,7 @@ export class CoursesService {
     return this.prisma.course.create({
       data: { ...dto, formateurId },
       include: {
-        formateur: { select: { id: true, firstName: true, lastName: true, email: true } },
+        formateur: { select: { id: true, firstName: true, lastName: true } },
       },
     });
   }
@@ -117,6 +117,26 @@ export class CoursesService {
     });
   }
 
+  async findMyOne(id: string, formateurId: string) {
+    const course = await this.prisma.course.findUnique({
+      where: { id },
+      include: {
+        modules: {
+          orderBy: { order: 'asc' },
+          include: {
+            lessons: { orderBy: { order: 'asc' } },
+          },
+        },
+        _count: { select: { enrollments: true } },
+      },
+    });
+
+    if (!course) throw new NotFoundException();
+    if (course.formateurId !== formateurId) throw new ForbiddenException();
+
+    return course;
+  }
+
   async findOne(id: string): Promise<CourseDetailDto> {
     const course = await this.prisma.course.findUnique({
       where: { id },
@@ -166,6 +186,12 @@ export class CoursesService {
   }
 
   async findContent(courseId: string, userId: string): Promise<CourseContentDto> {
+    const courseExists = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true },
+    });
+    if (!courseExists) throw new NotFoundException();
+
     const enrollment = await this.prisma.enrollment.findUnique({
       where: { userId_courseId: { userId, courseId } },
     });

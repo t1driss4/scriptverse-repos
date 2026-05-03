@@ -60,7 +60,7 @@ describe('UsersController', () => {
       usersService.updateRole.mockRejectedValue(new NotFoundException('User not found'));
 
       await expect(
-        controller.updateRole('unknown-uuid', { role: Role.ADMIN }),
+        controller.updateRole('unknown-uuid', { role: Role.FORMATEUR }),
       ).rejects.toThrow(NotFoundException);
     });
   });

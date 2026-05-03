@@ -8,6 +8,7 @@ import { ModulesModule } from './modules/modules.module';
 import { LessonsModule } from './lessons/lessons.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { UsersModule } from './users/users.module';
+import { QuizModule } from './quiz/quiz.module';
 import { JwtAccessGuard } from './auth/guards/jwt-access.guard';
 
 @Module({
@@ -19,6 +20,7 @@ import { JwtAccessGuard } from './auth/guards/jwt-access.guard';
     LessonsModule,
     EnrollmentsModule,
     UsersModule,
+    QuizModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
   ],
   providers: [

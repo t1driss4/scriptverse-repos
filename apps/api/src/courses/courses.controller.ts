@@ -49,6 +49,17 @@ export class CoursesController {
     return this.coursesService.findMine(userId);
   }
 
+  /** Formateur: get own course for editing (draft or published) */
+  @Get('mine/:id')
+  @UseGuards(RolesGuard)
+  @Roles(Role.FORMATEUR)
+  findMyOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser('sub') userId: string,
+  ) {
+    return this.coursesService.findMyOne(id, userId);
+  }
+
   /** Public course preview — modules and lessons without video URLs */
   @Public()
   @Get(':id')

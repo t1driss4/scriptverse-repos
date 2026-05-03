@@ -177,6 +177,117 @@ apps/api/src/courses/
 
 ---
 
+## 2026-05-03 — Ticket 8eeb1: "API: quiz (questions + tentative + score)"
+
+### Résumé
+
+Implémentation complète du domaine quiz : CRUD quiz/questions réservé aux formateurs propriétaires du module, lecture publique (questions sans `correctAnswer`), soumission de tentative avec calcul de score et corrections détaillées, et historique personnel des tentatives. L'ensemble est exposé via un nouveau `QuizModule` enregistré dans `AppModule`. 110 tests unitaires couvrent les DTOs, le service, et le contrôleur (toutes les branches d'erreur + invariants de sécurité).
+
+### Architecture
+
+**Endpoints**
+
+| Méthode | Route | Auth | Comportement |
+|---------|-------|------|--------------|
+| `POST` | `/modules/:moduleId/quiz` | FORMATEUR | Crée le quiz du module (1 quiz max par module) |
+| `GET` | `/modules/:moduleId/quiz` | Public | Retourne le quiz avec questions (sans `correctAnswer`) |
+| `PATCH` | `/modules/:moduleId/quiz` | FORMATEUR | Met à jour le titre du quiz |
+| `DELETE` | `/modules/:moduleId/quiz` | FORMATEUR | Supprime le quiz et toutes ses questions |
+| `POST` | `/modules/:moduleId/quiz/questions` | FORMATEUR | Ajoute une question au quiz |
+| `PATCH` | `/modules/:moduleId/quiz/questions/:questionId` | FORMATEUR | Met à jour une question |
+| `DELETE` | `/modules/:moduleId/quiz/questions/:questionId` | FORMATEUR | Supprime une question |
+| `POST` | `/modules/:moduleId/quiz/attempts` | Authentifié | Soumet les réponses → score + corrections |
+| `GET` | `/modules/:moduleId/quiz/attempts` | Authentifié | Historique personnel des tentatives |
+
+**DTOs de requête**
+
+| DTO | Champs validés |
+|-----|---------------|
+| `CreateQuizDto` | `title` — `@IsString @IsNotEmpty` |
+| `UpdateQuizDto` | `title?` — `@IsOptional @IsString @IsNotEmpty` |
+| `CreateQuestionDto` | `question` (non vide), `options` (tableau ≥ 2 strings), `correctAnswer` (entier ≥ 0), `order` (entier ≥ 1) |
+| `UpdateQuestionDto` | Tous les champs de `CreateQuestionDto` en `@IsOptional` |
+| `SubmitAttemptDto` | `answers` — tableau ≥ 1 entiers ≥ 0 |
+
+**Invariants de sécurité**
+
+- `correctAnswer` absent des questions retournées par `GET /modules/:moduleId/quiz` — exclu via `select` Prisma, pas seulement masqué à null.
+- Ownership vérifié par `assertModuleOwner` : remonte le module → course → `formateurId`, lance `ForbiddenException` si l'utilisateur n'est pas le formateur propriétaire. Mutualisé entre toutes les opérations d'écriture.
+- `BadRequestException('This module already has a quiz')` : unicité quiz/module enforced au niveau service avant d'interroger la base (contrainte `@unique` Prisma en backup).
+- Validation d'index : `correctAnswer` doit être `< options.length` ; vérifié à la création et à la mise à jour (uniquement quand les deux champs sont présents simultanément).
+
+**Logique de score (`submitAttempt`)**
+
+1. Récupère le quiz avec ses questions (ordonnées par `order` asc).
+2. Valide : quiz existe, a des questions, nombre de réponses = nombre de questions, chaque index de réponse `< options.length`.
+3. Compare chaque réponse au `correctAnswer` de la question correspondante.
+4. `score = round(correctCount / totalQuestions * 100)`.
+5. Persiste un `QuizAttempt` avec `userId`, `quizId`, `score`, et le tableau `answers`.
+6. Retourne `{ attemptId, score, totalQuestions, correctCount, completedAt, corrections[] }` où chaque `correction` contient `{ questionId, yourAnswer, correctAnswer, isCorrect }`.
+
+**Format de réponse `submitAttempt`**
+
+```typescript
+{
+  attemptId: string;
+  score: number;          // 0–100, arrondi entier
+  totalQuestions: number;
+  correctCount: number;
+  completedAt: string;    // ISO 8601
+  corrections: Array<{
+    questionId: string;
+    yourAnswer: number;
+    correctAnswer: number;
+    isCorrect: boolean;
+  }>;
+}
+```
+
+**`getMyAttempts` — sélection projetée**
+
+Retourne uniquement `{ id, score, answers, completedAt }` par tentative. Ordonnées `completedAt desc`. Filtrées par `userId` ET `quizId` pour garantir l'isolation entre utilisateurs.
+
+### Fichiers créés/modifiés
+
+```
+apps/api/src/quiz/
+├── quiz.module.ts                       # NOUVEAU — QuizModule (PrismaModule + QuizController + QuizService)
+├── quiz.controller.ts                   # NOUVEAU — 8 handlers, @Public sur findByModule uniquement
+├── quiz.controller.spec.ts              # NOUVEAU — 19 tests (délégation + métadonnées @Roles / @Public)
+├── quiz.service.ts                      # NOUVEAU — createForModule, findByModule, update/remove, addQuestion, update/removeQuestion, submitAttempt, getMyAttempts
+├── quiz.service.spec.ts                 # NOUVEAU — 47 tests (toutes les branches NotFoundException / ForbiddenException / BadRequestException + logique de score)
+└── dto/
+    ├── create-quiz.dto.ts               # NOUVEAU
+    ├── create-quiz.dto.spec.ts          # NOUVEAU — 4 tests
+    ├── update-quiz.dto.ts               # NOUVEAU
+    ├── update-quiz.dto.spec.ts          # NOUVEAU — 4 tests
+    ├── create-question.dto.ts           # NOUVEAU
+    ├── create-question.dto.spec.ts      # NOUVEAU — 15 tests
+    ├── update-question.dto.ts           # NOUVEAU
+    ├── update-question.dto.spec.ts      # NOUVEAU — 13 tests
+    ├── submit-attempt.dto.ts            # NOUVEAU
+    └── submit-attempt.dto.spec.ts       # NOUVEAU — 8 tests
+
+apps/api/src/app.module.ts               # QuizModule enregistré
+```
+
+### Tests
+
+- **47 tests service** répartis en 7 `describe` : `createForModule` (4), `findByModule` (2), `updateForModule` (4), `removeForModule` (4), `addQuestion` (5), `updateQuestion` (7), `removeQuestion` (5), `submitAttempt` (9), `getMyAttempts` (5). Couvrent l'ensemble des branches d'erreur (module absent, ForbiddenException, quiz absent, index hors bornes, compte de réponses erroné), les cas de score (0 %, 50 %, 100 %), la persistance des tentatives, et les corrections détaillées.
+- **19 tests contrôleur** : délégation avec tous les paramètres, assertions `Reflect.getMetadata` sur `ROLES_KEY` (FORMATEUR sur toutes les routes d'écriture) et `IS_PUBLIC_KEY` (`findByModule` public, `submitAttempt` et `getMyAttempts` authentifiés).
+- **44 tests DTO** (class-validator, `plainToInstance`) : `CreateQuizDto` (4), `UpdateQuizDto` (4), `CreateQuestionDto` (15), `UpdateQuestionDto` (13), `SubmitAttemptDto` (8).
+
+Total nouveaux tests ce ticket : **110**. Total suite projeté : **~323 tests, ~28 suites — tous verts**.
+
+### Notes
+
+- `assertModuleOwner` est une méthode privée mutualisée par toutes les opérations d'écriture. Elle remonte en un seul `findUnique` avec `include: { course: { select: { formateurId } } }` — pas de requête supplémentaire par opération.
+- Une seule relation `@unique moduleId` sur `Quiz` garantit qu'un module ne peut avoir qu'un seul quiz, vérifiée d'abord en service pour un message d'erreur explicite, puis en database comme filet de sécurité.
+- Les `submitAttempt` ne vérifient pas l'inscription — décision délibérée : un étudiant non inscrit peut tenter le quiz (les données de quiz sont publiques), mais ses tentatives ne sont visibles que par lui-même.
+- En v2 : ajouter un seuil de passage configurable par quiz (`passingScore`), une limite de tentatives par utilisateur, et des indices de progression agrégés sur le tableau de bord étudiant.
+
+---
+
 ## 2026-04-28 — Ticket 9f3a1: "DB: schéma initial + migrations (PostgreSQL + Prisma)"
 
 ### Résumé
