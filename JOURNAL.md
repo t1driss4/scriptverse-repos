@@ -2,6 +2,152 @@
 
 ---
 
+## 2026-05-06 — Ticket f364c: "UI dashboard formateur — liste cours, création/édition, modules/leçons, quiz, publication"
+
+### Résumé
+
+Implémentation complète du dashboard formateur en deux pages `'use client'` (Next.js 14 App Router) : la page `/formateur` (liste des cours, stats, toggle de publication) et l'éditeur de cours `/formateur/cours/[id]` (création/édition, gestion modules/leçons, authoring de quiz, publication avec checklist, suppression en deux étapes). La page de listing et une première version de l'éditeur existaient déjà sur la branche ; ce ticket finalise l'éditeur avec la gestion du cycle de vie complet (création → édition → publication → suppression) et corrige un défaut critique : les blocs `catch` manquants dans `ModulePanel`, `LessonRow` et `QuestionEditor` empêchaient les erreurs API de remonter à l'interface. 38 tests Vitest couvrent les deux pages (17 + 21).
+
+### Architecture
+
+**Routes**
+
+| URL | Fichier | Mode |
+|-----|---------|------|
+| `/formateur` | `apps/web/src/app/formateur/page.tsx` | Dashboard — liste + stats |
+| `/formateur/cours/nouveau` | `apps/web/src/app/formateur/cours/[id]/page.tsx` | Création (sentinel `'nouveau'`) |
+| `/formateur/cours/:id` | `apps/web/src/app/formateur/cours/[id]/page.tsx` | Édition d'un cours existant |
+
+Le segment `'nouveau'` est l'unique condition de branchement création/édition. Après un `POST /courses` réussi, `router.replace(newId)` remplace l'URL pour que le retour arrière revienne au dashboard et non à la page de création.
+
+**Arbre de composants — CourseEditorPage**
+
+```
+CourseEditorPage
+├── sticky header (breadcrumb · Sauvegarder · Publier/Dépublier)
+└── PageTransition
+    └── two-column layout
+        ├── LEFT
+        │   ├── ErrorBanner (conditionnel)
+        │   ├── CourseInfoCard (title · description · category · level · price)
+        │   └── ModulesCard [masqué en création]
+        │       └── ModulePanel × N
+        │           ├── tab Leçons → LessonRow × N
+        │           └── tab Quiz   → QuizPanel
+        │               └── QuestionEditor × N
+        └── RIGHT SIDEBAR
+            ├── PublicationChecklist (4 conditions)
+            ├── PublishToggle
+            ├── StatsCard
+            └── DangerZone (suppression 2 étapes)
+```
+
+**Gestion d'état**
+
+L'état est local (`useState` / `useCallback`). Aucun store global n'est nécessaire.
+
+- `CourseEditorPage` : `course`, `modules`, `saving`, `publishing`, `deleting`, `confirmDelete`, `addingModule`, `saved` (flash 2,5 s), champs de formulaire contrôlés
+- `ModulePanel` (par instance) : `lessons`, `expanded`, `editingTitle`, `activeTab`, flags de loading par opération, **`error`** (ajouté)
+- `LessonRow` (par instance) : `expanded`, `title`, `url`, `saving`, `removing`, **`error`** (ajouté)
+- `QuestionEditor` (par instance) : `text`, `options`, `correct`, `saving`, `removing`, **`error`** (ajouté)
+- `QuizPanel` (par instance) : `quiz`, `loading`, `creating`, `removingQuiz`, `addingQ`, `quizTitle`, `error`
+
+Les leçons vivent dans chaque `ModulePanel`, pas dans la racine de l'éditeur — évite le re-render de toute la liste de modules à chaque changement de leçon. Les quiz sont auto-contenus dans chaque `QuizPanel`, qui charge son propre quiz au montage.
+
+**Intégration API**
+
+Toutes les mutations passent par `request<T>()` (`apps/web/src/lib/api.ts`), qui extrait `body.message` et lève une `Error` pour tout statut non-2xx.
+
+| Surface | Opération | Appel API |
+|---------|-----------|-----------|
+| Dashboard | Chargement | `coursesApi.findMine(token)` |
+| Dashboard | Toggle publication | `coursesApi.update(token, id, { published })` |
+| Éditeur | Chargement | `coursesApi.findMyOne(token, id)` |
+| Éditeur | Créer cours | `coursesApi.create(token, payload)` |
+| Éditeur | Mettre à jour | `coursesApi.update(token, id, payload)` |
+| Éditeur | Supprimer | `coursesApi.remove(token, id)` |
+| Éditeur | Ajouter module | `modulesApi.create(token, courseId, payload)` |
+| ModulePanel | Renommer | `modulesApi.update(token, id, { title })` |
+| ModulePanel | Supprimer | `modulesApi.remove(token, id)` |
+| ModulePanel | Ajouter leçon | `lessonsApi.create(token, moduleId, payload)` |
+| LessonRow | Mettre à jour | `lessonsApi.update(token, id, payload)` |
+| LessonRow | Supprimer | `lessonsApi.remove(token, id)` |
+| QuizPanel | Charger quiz | `quizApi.findByModule(moduleId)` |
+| QuizPanel | Créer quiz | `quizApi.create(token, moduleId, { title })` |
+| QuizPanel | Supprimer quiz | `quizApi.remove(token, moduleId)` |
+| QuizPanel | Ajouter question | `quizApi.addQuestion(token, moduleId, payload)` |
+| QuestionEditor | Mettre à jour | `quizApi.updateQuestion(token, moduleId, questionId, payload)` |
+| QuestionEditor | Supprimer | `quizApi.removeQuestion(token, moduleId, questionId)` |
+
+**Checklist de publication**
+
+Quatre conditions calculées client-side pour `readyToPublish` :
+
+| Condition | Vérification |
+|-----------|-------------|
+| Titre renseigné | `title.trim() !== ''` |
+| Description renseignée | `description.trim() !== ''` |
+| Au moins 1 module | `modules.length > 0` |
+| Au moins 1 leçon | `modules.reduce((acc, m) => acc + m.lessons.length, 0) > 0` |
+
+Le bouton Publier dans le header sticky et la checklist de la sidebar partagent le même booléen et le même handler `handlePublishToggle`.
+
+**Suppression en deux étapes**
+
+`confirmDelete: false` → clic "Supprimer définitivement" → `confirmDelete: true` (UI de confirmation) → clic confirmer → `DELETE /courses/:id` + `router.push('/formateur')`. Annulation → `confirmDelete: false`. En cas d'erreur API, les deux flags sont réinitialisés pour permettre une nouvelle tentative.
+
+**Correction bug : erreurs API silencieuses**
+
+Les blocs `catch` étaient absents de plusieurs opérations asynchrones dans les composants enfants. Les erreurs se terminaient en `UnhandledPromiseRejection` sans aucun retour visuel. Le correctif ajoute un état `error: string | null` local et un `<ErrorBanner>` inline dans `ModulePanel`, `LessonRow` et `QuestionEditor`. Le pattern systématique :
+
+```typescript
+} catch (err) {
+  setError(err instanceof Error ? err.message : 'Erreur lors de …');
+} finally {
+  setSaving(false);
+}
+```
+
+### Fichiers créés/modifiés
+
+```
+apps/web/src/app/formateur/
+├── page.tsx                              # Dashboard (stats, table, toggle — déjà implémenté)
+├── __tests__/page.test.tsx               # NOUVEAU — 17 tests Vitest
+└── cours/[id]/
+    ├── page.tsx                          # Éditeur complet + fix catch blocks (+31 / -4 lignes)
+    └── __tests__/page.test.tsx           # NOUVEAU — 21 tests Vitest
+
+ARCH_SPECS.md                             # Feature 68 ajoutée (+262 lignes)
+```
+
+### Tests
+
+**`FormateurPage` — 17 tests**
+
+Couvrent : redirection non-formateur et non-authentifié, skeleton pendant le chargement auth, fetch au montage, affichage des cours, ErrorBanner + bouton "Réessayer", filtres published/draft/empty state, toggle de publication avec indicateur `…`, lien "Nouveau cours", affichage du niveau et du prix.
+
+**`CourseEditorPage` — 21 tests**
+
+Couvrent : redirection, skeleton auth, mode création (titre "Nouveau cours", pas d'appel `findMyOne`, tip "sauvegarder d'abord"), validation (sans titre/description), création et redirection, chargement en édition, ErrorBanner, feedback "Sauvegardé", checklist de publication, boutons publier/dépublier (dont état disabled sans leçons), flux de suppression en deux étapes (confirm + cancel), ajout de module.
+
+Total nouveaux tests ce ticket : **38**. Infrastructure Vitest déjà en place depuis le ticket d78db.
+
+### Invariants clés (documentés dans ARCH_SPECS.md § 68.10)
+
+- Mode création vs. édition : seul `params.id === 'nouveau'` fait la distinction ; `router.replace` (pas `push`) après création.
+- Acquisition du token synchrone : `getAccessToken()` lit depuis `localStorage` directement — si expiré, l'API retourne 401 et l'erreur remonte dans l'UI.
+- Mises à jour d'état immutables : toutes les mutations `setCourses`, `setModules`, `setLessons` utilisent spread ou `map`/`filter`, jamais de mutation en place.
+- Flash "Sauvegardé" : `saved = true` pendant 2 500 ms via `setTimeout` — pas de dépendance toast externe.
+- Section modules masquée en création : la gestion des modules n'est rendue que si `!isNew` ; le formateur doit d'abord sauvegarder les infos de base.
+
+### Notes
+
+- `getAccessToken()` ne tente pas de refresh automatique dans ces pages — si le token expire pendant une session longue d'édition, l'erreur 401 s'affiche dans l'`ErrorBanner`. Un refresh transparent serait à ajouter en v2 via `api-client.ts`.
+- En v2 : upload de thumbnail (actuellement placeholder "NYI"), limite de tentatives de quiz configurable par quiz, pagination sur `GET /courses/mine` si le catalogue formateur grossit.
+
+---
+
 ## 2026-04-28 — Ticket bbaee: "API: catalogue de cours (listing + recherche/filtre)"
 
 ### Résumé

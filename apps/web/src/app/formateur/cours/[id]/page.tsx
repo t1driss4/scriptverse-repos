@@ -209,7 +209,11 @@ function QuizPanel({
     try {
       const q = await quizApi.findByModule(moduleId);
       setQuiz(q);
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (!msg.includes('404')) {
+        setError(msg || 'Erreur lors du chargement du quiz');
+      }
       setQuiz(null);
     } finally {
       setLoading(false);
@@ -236,9 +240,12 @@ function QuizPanel({
   async function deleteQuiz() {
     if (!quiz) return;
     setRemovingQuiz(true);
+    setError(null);
     try {
       await quizApi.remove(token, moduleId);
       setQuiz(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la suppression du quiz');
     } finally {
       setRemovingQuiz(false);
     }
@@ -703,7 +710,7 @@ export default function CourseEditorPage({ params }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [params.id, isNew]);
+  }, [params.id, isNew, token]);
 
   useEffect(() => {
     if (!authLoading) {
