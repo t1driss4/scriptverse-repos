@@ -66,10 +66,12 @@ function QuestionEditor({
   const [correct, setCorrect] = useState(question.correctAnswer);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function save() {
     if (!text.trim() || options.some((o) => !o.trim())) return;
     setSaving(true);
+    setError(null);
     try {
       const updated = await quizApi.updateQuestion(token, moduleId, question.id, {
         question: text,
@@ -77,6 +79,8 @@ function QuestionEditor({
         correctAnswer: correct,
       });
       onUpdated(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde');
     } finally {
       setSaving(false);
     }
@@ -84,10 +88,12 @@ function QuestionEditor({
 
   async function remove() {
     setRemoving(true);
+    setError(null);
     try {
       await quizApi.removeQuestion(token, moduleId, question.id);
       onRemoved(question.id);
-    } finally {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la suppression');
       setRemoving(false);
     }
   }
@@ -108,6 +114,8 @@ function QuestionEditor({
           {removing ? '…' : 'Supprimer'}
         </button>
       </div>
+
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-1">Intitulé</label>
@@ -368,13 +376,17 @@ function LessonRow({
   const [url, setUrl] = useState(lesson.url ?? '');
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function save() {
     setSaving(true);
+    setError(null);
     try {
       const updated = await lessonsApi.update(token, lesson.id, { title, url: url || undefined });
       onUpdated(updated);
       setExpanded(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde');
     } finally {
       setSaving(false);
     }
@@ -382,10 +394,12 @@ function LessonRow({
 
   async function remove() {
     setRemoving(true);
+    setError(null);
     try {
       await lessonsApi.remove(token, lesson.id);
       onRemoved(lesson.id);
-    } finally {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la suppression');
       setRemoving(false);
     }
   }
@@ -429,6 +443,7 @@ function LessonRow({
 
       {expanded && (
         <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-3">
+          {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Titre</label>
@@ -478,14 +493,18 @@ function ModulePanel({
   const [savingTitle, setSavingTitle] = useState(false);
   const [removingMod, setRemovingMod] = useState(false);
   const [addingLesson, setAddingLesson] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function saveTitle() {
     if (!title.trim()) return;
     setSavingTitle(true);
+    setError(null);
     try {
       const updated = await modulesApi.update(token, mod.id, { title });
       onUpdated({ ...mod, title: updated.title });
       setEditingTitle(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la sauvegarde du titre');
     } finally {
       setSavingTitle(false);
     }
@@ -493,16 +512,19 @@ function ModulePanel({
 
   async function removeModule() {
     setRemovingMod(true);
+    setError(null);
     try {
       await modulesApi.remove(token, mod.id);
       onRemoved(mod.id);
-    } finally {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors de la suppression');
       setRemovingMod(false);
     }
   }
 
   async function addLesson() {
     setAddingLesson(true);
+    setError(null);
     try {
       const newLesson = await lessonsApi.create(token, mod.id, {
         title: `Leçon ${lessons.length + 1}`,
@@ -510,6 +532,8 @@ function ModulePanel({
         order: lessons.length + 1,
       });
       setLessons((prev) => [...prev, newLesson]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur lors de l'ajout de la leçon");
     } finally {
       setAddingLesson(false);
     }
@@ -573,6 +597,7 @@ function ModulePanel({
       {/* Expanded content */}
       {expanded && (
         <div className="p-4 space-y-4">
+          {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
           {/* Tab bar */}
           <div className="flex items-center gap-1 border-b border-gray-100 pb-3">
             <button

@@ -2409,4 +2409,264 @@ export class QuizModule {}
 - **`correctAnswer` is FORMATEUR-only in mutation responses** — `findByModule` (the public GET) strips `correctAnswer` before returning. Mutation responses (create/update question) include it for the FORMATEUR making the change.
 - **Ownership is service-level, not guard-level** — `assertModuleOwner` traverses `Module → Course → formateurId` inside the service. Guards only enforce role (`FORMATEUR`); they do not check resource ownership.
 - **Module-nested routing** — all endpoints are nested under `/modules/:moduleId/quiz` rather than under a quiz ID. This means the quiz is always addressed in the context of its module, which aligns with the one-quiz-per-module constraint.
-- **Routing gap with frontend API layer** — the frontend API layer (§61.2) uses quiz-id-based paths. This must be resolved before wiring the quiz editor to real endpoints.
+
+---
+
+## Feature 68 — UI Dashboard Formateur
+
+---
+
+## 68.1 Overview
+
+The Formateur Dashboard is a two-page `'use client'` feature inside the Next.js 14 App Router that gives instructors full lifecycle control over their courses: listing, creation, editing, module/lesson management, quiz authoring, and publication. All pages are guarded client-side by an `AuthContext` role check (`user.role !== 'FORMATEUR'` → `router.replace('/')`). Every mutating operation calls the REST API with the `Bearer` access token retrieved from `getAccessToken()` (localStorage).
+
+---
+
+## 68.2 Route Map
+
+| URL | File | Purpose |
+|-----|------|---------|
+| `/formateur` | `apps/web/src/app/formateur/page.tsx` | Dashboard — course list + stats |
+| `/formateur/cours/nouveau` | `apps/web/src/app/formateur/cours/[id]/page.tsx` | Create new course (`params.id === 'nouveau'`) |
+| `/formateur/cours/:id` | `apps/web/src/app/formateur/cours/[id]/page.tsx` | Edit existing course |
+
+Both pages share the same `[id]` dynamic segment; the string `'nouveau'` is the sentinel value that switches the editor into creation mode. After a successful `POST /courses`, the router replaces the URL with the new course ID so the user lands in edit mode immediately.
+
+---
+
+## 68.3 Component Tree
+
+```
+FormateurPage                          (/formateur)
+├── Navbar (role="FORMATEUR")
+└── PageTransition
+    ├── FadeIn > Header + "Nouveau cours" CTA
+    ├── ErrorBanner (conditional)
+    ├── StaggerCards > StatCard × 3
+    └── CourseTable
+        ├── thead (Cours / Statut / Apprenants / Modules / Actions)
+        ├── tbody[loading]  → SkeletonRow × 3
+        └── CourseTableBody[loaded]
+            └── motion.tr × N (stagger animation)
+                └── Publish toggle · Edit link · Preview link
+
+CourseEditorPage                       (/formateur/cours/[id])
+├── sticky header (breadcrumb · Save · Publish/Unpublish)
+└── PageTransition
+    └── two-column layout
+        ├── LEFT COLUMN
+        │   ├── ErrorBanner (conditional)
+        │   ├── CourseInfoCard
+        │   │   ├── title input
+        │   │   ├── description textarea
+        │   │   ├── category / level / price selects
+        │   │   └── thumbnail placeholder (upload NYI)
+        │   └── ModulesCard (hidden in creation mode)
+        │       ├── "Ajouter un module" CTA
+        │       └── ModulePanel × N
+        │           ├── module header (order badge · rename · expand · delete)
+        │           └── expanded body
+        │               ├── tab bar  [Leçons | Quiz]
+        │               ├── tab: Leçons
+        │               │   ├── LessonRow × N
+        │               │   │   ├── collapsed: index badge · title · expand chevron · delete
+        │               │   │   └── expanded: title input · type select · url input · Save/Cancel
+        │               │   └── "Ajouter une leçon" CTA
+        │               └── tab: Quiz
+        │                   └── QuizPanel
+        │                       ├── [no quiz]  → title input + "Créer" button
+        │                       └── [quiz exists]
+        │                           ├── quiz header (title · question count · "Supprimer le quiz")
+        │                           ├── QuestionEditor × N
+        │                           │   ├── question text input
+        │                           │   ├── option inputs (2-5) + radio for correct answer
+        │                           │   └── Save / Supprimer
+        │                           └── "Ajouter une question" CTA
+        └── RIGHT SIDEBAR
+            ├── PublicationChecklist (title · description · ≥1 module · ≥1 lesson)
+            ├── PublishToggle button
+            ├── StatsCard (modules · lessons · learners)
+            └── DangerZone (delete with confirmation step)
+```
+
+---
+
+## 68.4 State Management
+
+All state is local React (`useState` / `useCallback`). There is no global store for formateur data.
+
+### 68.4.1 FormateurPage state
+
+| State variable | Type | Purpose |
+|----------------|------|---------|
+| `courses` | `Course[]` | Full list fetched from `GET /courses/mine` |
+| `loading` | `boolean` | Initial fetch in-flight |
+| `error` | `string \| null` | API error message, displayed in `ErrorBanner` |
+| `statusFilter` | `'all' \| 'published' \| 'draft'` | Client-side filter — no re-fetch |
+| `isToggling` | `string \| null` | Course ID currently being publish-toggled |
+
+Filtered courses are derived synchronously: `courses.filter(...)`. Stats (`publishedCount`, `totalEnrollments`) are also derived without extra state.
+
+### 68.4.2 CourseEditorPage state
+
+| State variable | Type | Purpose |
+|----------------|------|---------|
+| `course` | `Course \| null` | Loaded course record (null in creation mode) |
+| `modules` | `CourseModule[]` | Module list with nested `lessons` |
+| `loading` | `boolean` | Initial course fetch |
+| `error` | `string \| null` | Top-level API error |
+| `saving` | `boolean` | `PATCH /courses/:id` in-flight |
+| `saved` | `boolean` | Transient success state — resets after 2.5 s |
+| `publishing` | `boolean` | Publish/unpublish toggle in-flight |
+| `deleting` | `boolean` | Delete in-flight |
+| `confirmDelete` | `boolean` | Two-step delete confirmation |
+| `addingModule` | `boolean` | `POST /courses/:id/modules` in-flight |
+| `title`, `description`, `category`, `level`, `price` | primitives | Controlled form fields |
+
+### 68.4.3 ModulePanel state (per-instance)
+
+| State variable | Purpose |
+|----------------|---------|
+| `expanded` | accordion open/closed |
+| `editingTitle` | inline rename mode |
+| `title` | controlled input for rename |
+| `lessons` | local copy of `mod.lessons` — mutated immutably on add/remove/update |
+| `activeTab` | `'lessons' \| 'quiz'` |
+| `savingTitle`, `removingMod`, `addingLesson` | per-operation loading flags |
+
+### 68.4.4 LessonRow state (per-instance)
+
+Holds `expanded`, `title`, `url`, `saving`, `removing`. Calls `onUpdated` / `onRemoved` callbacks to propagate changes up to `ModulePanel`.
+
+### 68.4.5 QuizPanel state (per-instance)
+
+Holds `quiz`, `loading`, `creating`, `removingQuiz`, `addingQ`, `quizTitle`, `error`. Loads quiz on mount via `GET /modules/:moduleId/quiz`. Propagates question updates via `handleQuestionUpdated` / `handleQuestionRemoved`.
+
+### 68.4.6 QuestionEditor state (per-instance)
+
+Holds `text`, `options` (`string[]`), `correct` (index), `saving`, `removing`. Fires `onUpdated` / `onRemoved` callbacks.
+
+---
+
+## 68.5 API Integration
+
+All HTTP calls go through the `request<T>()` helper in `apps/web/src/lib/api.ts`, which:
+1. Prepends `NEXT_PUBLIC_API_URL` (default `http://localhost:3000`).
+2. Sets `Content-Type: application/json`.
+3. Returns `undefined` for `204 No Content`.
+4. Throws `new Error(message)` for non-2xx responses, extracting `body.message` (normalising arrays to the first element).
+
+The `bearer(token)` helper produces `{ Authorization: 'Bearer <token>' }` inline — no interceptor layer.
+
+### API calls by surface
+
+| Surface | Operation | API call |
+|---------|-----------|----------|
+| Dashboard | Load courses | `coursesApi.findMine(token)` → `GET /courses/mine` |
+| Dashboard | Toggle publish | `coursesApi.update(token, id, { published })` → `PATCH /courses/:id` |
+| Editor | Load course | `coursesApi.findMyOne(token, id)` → `GET /courses/mine/:id` |
+| Editor | Create course | `coursesApi.create(token, payload)` → `POST /courses` |
+| Editor | Update course | `coursesApi.update(token, id, payload)` → `PATCH /courses/:id` |
+| Editor | Delete course | `coursesApi.remove(token, id)` → `DELETE /courses/:id` |
+| Editor | Add module | `modulesApi.create(token, courseId, payload)` → `POST /courses/:courseId/modules` |
+| ModulePanel | Rename module | `modulesApi.update(token, id, { title })` → `PATCH /modules/:id` |
+| ModulePanel | Remove module | `modulesApi.remove(token, id)` → `DELETE /modules/:id` |
+| ModulePanel | Add lesson | `lessonsApi.create(token, moduleId, payload)` → `POST /modules/:moduleId/lessons` |
+| LessonRow | Update lesson | `lessonsApi.update(token, id, payload)` → `PATCH /lessons/:id` |
+| LessonRow | Remove lesson | `lessonsApi.remove(token, id)` → `DELETE /lessons/:id` |
+| QuizPanel | Load quiz | `quizApi.findByModule(moduleId)` → `GET /modules/:moduleId/quiz` |
+| QuizPanel | Create quiz | `quizApi.create(token, moduleId, { title })` → `POST /modules/:moduleId/quiz` |
+| QuizPanel | Delete quiz | `quizApi.remove(token, moduleId)` → `DELETE /modules/:moduleId/quiz` |
+| QuizPanel | Add question | `quizApi.addQuestion(token, moduleId, payload)` → `POST /modules/:moduleId/quiz/questions` |
+| QuestionEditor | Update question | `quizApi.updateQuestion(token, moduleId, questionId, payload)` → `PATCH /modules/:moduleId/quiz/questions/:questionId` |
+| QuestionEditor | Remove question | `quizApi.removeQuestion(token, moduleId, questionId)` → `DELETE /modules/:moduleId/quiz/questions/:questionId` |
+
+---
+
+## 68.6 Error and Loading States
+
+### Loading states
+
+| Context | Mechanism |
+|---------|-----------|
+| Dashboard initial load | `loading` boolean → renders 3 `SkeletonRow` components in `<tbody>` |
+| Dashboard stats | `loading` boolean → renders `skeleton` div instead of numeric value |
+| Editor initial load | `authLoading \|\| loading` → renders full skeleton layout (header placeholder + 4 skeleton inputs + sidebar skeletons) |
+| Per-operation (save, publish, delete, add module) | Dedicated boolean flag (`saving`, `publishing`, `deleting`, `addingModule`) → button `disabled` + label changes to `'…'` or descriptive text |
+| QuizPanel initial load | `loading` boolean → renders single `skeleton` div |
+| QuestionEditor save/remove | `saving` / `removing` flags → button text + `disabled` |
+| LessonRow save/remove | `saving` / `removing` flags → button text + `disabled` |
+
+Skeleton components use the `.skeleton` CSS utility class (animated shimmer background).
+
+### Error states
+
+| Context | Mechanism |
+|---------|-----------|
+| Dashboard API error | `error` string → red `ErrorBanner` with "Réessayer" button that calls `fetchCourses()` |
+| Editor top-level errors | `error` string → `ErrorBanner` with dismiss (`✕`) button rendered above the form |
+| QuizPanel errors | Local `error` string → `ErrorBanner` inline within the panel |
+| Per-component errors (LessonRow, QuestionEditor) | Errors bubble via thrown `Error`; parent panels surface them if needed |
+
+All error messages are extracted from the API response body (`body.message`) by the `request()` helper. The `catch` block pattern is:
+
+```typescript
+} catch (err) {
+  setError(err instanceof Error ? err.message : 'Erreur lors de …');
+}
+```
+
+---
+
+## 68.7 Publication Flow
+
+A course can only be published when four checklist items are satisfied (computed client-side as `readyToPublish`):
+
+| Condition | Check |
+|-----------|-------|
+| Title set | `title.trim() !== ''` |
+| Description set | `description.trim() !== ''` |
+| At least 1 module | `modules.length > 0` |
+| At least 1 lesson total | `modules.reduce((acc, m) => acc + m.lessons.length, 0) > 0` |
+
+The Publish button in the sticky header and the sidebar checklist share the same `readyToPublish` boolean and the same `handlePublishToggle` handler. The handler calls `PATCH /courses/:id` with `{ published: !course.published }` and updates local `course` state immutably on success.
+
+---
+
+## 68.8 Two-Step Delete
+
+Course deletion uses a two-step confirmation to prevent accidental permanent loss:
+
+1. User clicks "Supprimer définitivement" → `confirmDelete` is set to `true`, revealing a confirmation UI.
+2. User confirms → `handleDelete()` calls `DELETE /courses/:id` and redirects to `/formateur` on success.
+3. User cancels → `confirmDelete` resets to `false`.
+
+During the delete request `deleting` is `true` and both buttons are disabled. On API error, `deleting` and `confirmDelete` reset so the user can retry.
+
+---
+
+## 68.9 Animation Strategy
+
+Animations use **Framer Motion** (`framer-motion@12`) with reduced-motion support via `useReducedMotion()`.
+
+| Element | Animation |
+|---------|-----------|
+| Page entry | `PageTransition` wrapper — slide-up + fade |
+| Header row | `FadeIn direction="up" delay={0}` |
+| Stat cards | `StaggerCards` + `StaggerItem` — stagger 0.07 s |
+| Course table rows | `motion.tbody` + `motion.tr` — stagger 0.07 s, 22 px Y offset |
+| Reduced motion | `staggerItemReduced` variant — opacity 1, y 0, instant |
+
+When `useReducedMotion()` returns `true`, the stagger variant is replaced with a no-animation fallback, and `initial` is set to `'visible'` directly.
+
+---
+
+## 68.10 Key Design Invariants
+
+- **Creation vs. edit mode** — The string `'nouveau'` in the URL param (`params.id === 'nouveau'`) is the only branching condition. In creation mode: `loading` starts as `false`, modules section is hidden, and after `POST /courses` the router calls `router.replace(...)` (not `push`) so the back button goes to the dashboard rather than the creation URL.
+- **Token acquisition is synchronous** — `getAccessToken()` reads directly from localStorage. There is no async token refresh in these pages; if the token is expired, the API returns 401 and the error surface in the UI.
+- **Immutable state updates throughout** — All `setCourses`, `setModules`, `setLessons`, `setQuiz` calls use spread or `map`/`filter` — never in-place mutation.
+- **Lesson state lives in ModulePanel, not the editor root** — `lessons` is owned by each `ModulePanel` instance, initialised from `mod.lessons`. The editor root owns `modules` (the list of `CourseModule` objects without live lesson updates). This avoids unnecessary re-renders of the full module list on every lesson change.
+- **Quiz state is self-contained per QuizPanel** — Each `QuizPanel` fetches its own quiz on mount. The parent `ModulePanel` does not know about quiz state and does not need to.
+- **`saved` flash feedback** — After a successful `PATCH /courses/:id`, `saved` is set to `true` for 2 500 ms via `setTimeout`, turning the Save button green with a checkmark. This avoids any toast library dependency.
+- **Modules section requires a persisted course** — Module management (add/rename/delete) is only rendered when `!isNew`. The formateur must save the course info first (which redirects from `/nouveau` to `/:id`) before the modules section appears.
