@@ -23,6 +23,9 @@ export interface AuthUser {
   id: string;
   email: string;
   role: Role;
+  firstName?: string;
+  lastName?: string;
+  avatar?: string;
 }
 
 interface AuthContextType {
@@ -43,10 +46,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const hydrateFromToken = useCallback((token: string) => {
+  const hydrateFromToken = useCallback((token: string): AuthUser => {
     const payload = decodeJwt(token);
-    if (payload) {
-      setUser({ id: payload.sub, email: payload.email, role: payload.role });
+    if (!payload) throw new Error('Invalid token');
+    return { id: payload.sub, email: payload.email, role: payload.role };
+  }, []);
+
+  const enrichWithProfile = useCallback(async (base: AuthUser): Promise<void> => {
+    try {
+      const profile = await authApi.me();
+      setUser({
+        ...base,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        avatar: profile.avatar,
+      });
+    } catch {
+      // Profile fetch failed — keep base user from JWT, still authenticated
+      setUser(base);
     }
   }, []);
 
@@ -61,8 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const payload = decodeJwt(accessToken);
 
     if (payload && !isTokenExpired(payload)) {
-      setUser({ id: payload.sub, email: payload.email, role: payload.role });
-      setIsLoading(false);
+      const base = { id: payload.sub, email: payload.email, role: payload.role };
+      enrichWithProfile(base).finally(() => setIsLoading(false));
       return;
     }
 
@@ -76,35 +93,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     authApi
       .refresh(refreshToken)
-      .then(({ accessToken: newAccess, refreshToken: newRefresh }) => {
+      .then(async ({ accessToken: newAccess, refreshToken: newRefresh }) => {
         setTokens(newAccess, newRefresh);
-        hydrateFromToken(newAccess);
+        const base = hydrateFromToken(newAccess);
+        await enrichWithProfile(base);
       })
       .catch(() => {
         clearTokens();
       })
       .finally(() => setIsLoading(false));
-  }, [hydrateFromToken]);
+  }, [hydrateFromToken, enrichWithProfile]);
 
   const login = useCallback(
     async (email: string, password: string) => {
-      const { accessToken, refreshToken } = await authApi.login({
-        email,
-        password,
-      });
+      const { accessToken, refreshToken } = await authApi.login({ email, password });
       setTokens(accessToken, refreshToken);
-      hydrateFromToken(accessToken);
+      const base = hydrateFromToken(accessToken);
+      await enrichWithProfile(base);
     },
-    [hydrateFromToken],
+    [hydrateFromToken, enrichWithProfile],
   );
 
   const signup = useCallback(
     async (data: { email: string; password: string; role?: string }) => {
       const { accessToken, refreshToken } = await authApi.signup(data);
       setTokens(accessToken, refreshToken);
-      hydrateFromToken(accessToken);
+      const base = hydrateFromToken(accessToken);
+      await enrichWithProfile(base);
     },
-    [hydrateFromToken],
+    [hydrateFromToken, enrichWithProfile],
   );
 
   const logout = useCallback(async () => {

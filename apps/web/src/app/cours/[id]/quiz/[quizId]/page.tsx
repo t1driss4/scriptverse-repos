@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { mockCourses } from '@/lib/mock-data';
-import type { QuizQuestion } from '@/lib/types';
+import type { Quiz, QuizQuestion } from '@/lib/types';
 import { ScaleIn, AnimatedProgress } from '@/components/animations';
 
 interface Props {
@@ -128,7 +128,7 @@ export default function QuizPage({ params }: Props) {
   // In v1, quizzes are attached to modules (not yet populated in mock data)
   const allLessons = course?.modules?.flatMap((m) => m.lessons) ?? [];
   const chapter = allLessons[0];
-  const quiz = undefined as import('@/lib/types').Quiz | undefined;
+  const quiz = undefined as Quiz | undefined;
 
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [answers, setAnswers] = useState<(number | null)[]>(
@@ -268,7 +268,7 @@ export default function QuizPage({ params }: Props) {
             </button>
 
             <div className="flex gap-1.5">
-              {quiz.questions.map((_: import('@/lib/types').QuizQuestion, idx: number) => (
+              {quiz.questions.map((_: QuizQuestion, idx: number) => (
                 <button
                   key={idx}
                   onClick={() => setCurrentQuestion(idx)}

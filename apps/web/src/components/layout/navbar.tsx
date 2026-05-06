@@ -1,11 +1,24 @@
+'use client';
+
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 
-interface NavbarProps {
-  role?: 'APPRENANT' | 'FORMATEUR' | 'ADMIN';
-  userName?: string;
-}
+export function Navbar() {
+  const { user, logout } = useAuth();
+  const router = useRouter();
 
-export function Navbar({ role = 'APPRENANT', userName = 'Bob D.' }: NavbarProps) {
+  const displayName = user?.firstName
+    ? `${user.firstName} ${user.lastName ?? ''}`.trim()
+    : (user?.email ?? '');
+
+  const initial = displayName.slice(0, 1).toUpperCase();
+
+  async function handleLogout() {
+    await logout();
+    router.push('/auth/login');
+  }
+
   return (
     <header className="sticky top-0 z-30 border-b border-gray-200 bg-white">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
@@ -22,10 +35,12 @@ export function Navbar({ role = 'APPRENANT', userName = 'Bob D.' }: NavbarProps)
           <Link href="/catalogue" className="hover:text-primary-600 transition-colors">
             Catalogue
           </Link>
-          <Link href="/dashboard" className="hover:text-primary-600 transition-colors">
-            Mon espace
-          </Link>
-          {role === 'FORMATEUR' && (
+          {user && (
+            <Link href="/dashboard" className="hover:text-primary-600 transition-colors">
+              Mon espace
+            </Link>
+          )}
+          {user?.role === 'FORMATEUR' && (
             <Link href="/formateur" className="hover:text-primary-600 transition-colors">
               Mes cours
             </Link>
@@ -34,18 +49,29 @@ export function Navbar({ role = 'APPRENANT', userName = 'Bob D.' }: NavbarProps)
 
         {/* User menu */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-sm font-semibold">
-              {userName.slice(0, 1)}
-            </div>
-            <span className="hidden sm:block text-sm font-medium text-gray-700">{userName}</span>
-          </div>
-          <Link
-            href="/auth/login"
-            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            Déconnexion
-          </Link>
+          {user ? (
+            <>
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 text-sm font-semibold">
+                  {initial}
+                </div>
+                <span className="hidden sm:block text-sm font-medium text-gray-700">{displayName}</span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Déconnexion
+              </button>
+            </>
+          ) : (
+            <Link
+              href="/auth/login"
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              Connexion
+            </Link>
+          )}
         </div>
       </div>
     </header>

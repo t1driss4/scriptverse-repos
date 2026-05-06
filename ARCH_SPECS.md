@@ -2410,3 +2410,777 @@ export class QuizModule {}
 - **Ownership is service-level, not guard-level** — `assertModuleOwner` traverses `Module → Course → formateurId` inside the service. Guards only enforce role (`FORMATEUR`); they do not check resource ownership.
 - **Module-nested routing** — all endpoints are nested under `/modules/:moduleId/quiz` rather than under a quiz ID. This means the quiz is always addressed in the context of its module, which aligns with the one-quiz-per-module constraint.
 - **Routing gap with frontend API layer** — the frontend API layer (§61.2) uses quiz-id-based paths. This must be resolved before wiring the quiz editor to real endpoints.
+
+---
+
+---
+
+# Feature: Front — Connexion Next.js à l'API (Auth + Catalogue + Cours)
+
+---
+
+## 68. Overview
+
+This feature connects `apps/web` (Next.js 14, App Router) to `apps/api` (NestJS 10) for four concern areas:
+
+1. **Auth flows** — signup, login, token refresh, logout, profile retrieval (`GET /auth/me`)
+2. **Route protection** — server-side middleware gate + client-side role enforcement hook
+3. **Course catalogue** — server-rendered list with URL-driven search/filter/pagination
+4. **Course detail** — public SSR skeleton + authenticated client-side enrolled content
+
+### 68.1 Tech Constraints
+
+| Constraint | Detail |
+|---|---|
+| Token storage | `localStorage` — keys `sv_access_token` / `sv_refresh_token` |
+| Server-side session marker | `sv_session=1` cookie (no token data; readable by `middleware.ts`) |
+| Auto-refresh | `apiRequest()` in `api-client.ts` retries once on 401 with refreshed token |
+| SSR data | Server Components fetch public endpoints; no auth token available server-side |
+| Enrolled content | Client Components fetch `GET /courses/:id/content` with Bearer token from localStorage |
+| Filter state | URL search params — bookmarkable, shareable, avoids client-state duplication |
+
+### 68.2 Files Touched
+
+**New files:**
+- `apps/web/src/app/middleware.ts`
+- `apps/web/src/hooks/useRequireAuth.ts`
+- `apps/web/src/app/catalogue/loading.tsx`
+- `apps/web/src/app/catalogue/error.tsx`
+- `apps/web/src/app/cours/[id]/loading.tsx`
+- `apps/web/src/app/cours/[id]/error.tsx`
+- `apps/web/src/app/cours/[id]/CourseDetailClient.tsx`
+
+**Modified files:**
+- `apps/web/src/lib/types.ts` — add `CoursePreview`, `CourseListResult`, `CourseDetailDto`, `CourseContentDto`, enriched `AuthUser`
+- `apps/web/src/lib/api.ts` — add `authApi.me()`, update `coursesApi.findAll(query?)`
+- `apps/web/src/contexts/AuthContext.tsx` — replace `hydrateFromToken()` with `hydrateFromApi()`
+- `apps/web/src/app/catalogue/page.tsx` — forward `searchParams`, type as `CourseListResult`
+- `apps/web/src/app/cours/[id]/page.tsx` — extract client parts, add `notFound()` guard
+
+---
+
+## 69. Frontend Layer Architecture
+
+The frontend is organised in five horizontal layers:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. Route Layer (app/)                                   │
+│     page.tsx (RSC) · layout.tsx · loading.tsx · error.tsx│
+├─────────────────────────────────────────────────────────┤
+│  2. Client Component Layer                               │
+│     CatalogueClient · CourseDetailClient · EnrollButton  │
+├─────────────────────────────────────────────────────────┤
+│  3. Context / Hook Layer                                 │
+│     AuthContext · useRequireAuth · useCourseContent      │
+├─────────────────────────────────────────────────────────┤
+│  4. API Wrapper Layer (lib/api.ts)                       │
+│     authApi · coursesApi  (typed, path-based)            │
+├─────────────────────────────────────────────────────────┤
+│  5. HTTP Transport Layer (lib/api-client.ts)             │
+│     apiRequest() · refreshTokens() · AuthExpiredError    │
+└─────────────────────────────────────────────────────────┘
+```
+
+Rules:
+- Layers only call downward (Route → Client → Hook → API wrapper → Transport).
+- RSC pages never import `AuthContext` — they fetch public data server-side and pass it as props.
+- Client Components that need tokens call hooks or `apiRequest()` directly; they never read cookies.
+
+---
+
+## 70. Auth Integration
+
+### 70.1 AuthUser Type — Enriched
+
+`AuthUser` is expanded to include all profile fields returned by `GET /auth/me`:
+
+```typescript
+// apps/web/src/lib/types.ts
+export interface AuthUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: Role;
+  avatar?: string;
+}
+```
+
+The previous version only carried `{ id, email, role }` decoded from the JWT payload. The enriched version requires a real API call.
+
+### 70.2 authApi.me()
+
+```typescript
+// apps/web/src/lib/api.ts  (addition to authApi)
+me(): Promise<AuthUser> {
+  return apiRequest<AuthUser>('/auth/me');
+}
+```
+
+Uses `apiRequest()` (with auto-refresh) so the call silently refreshes an expired access token before returning the profile.
+
+### 70.3 AuthContext — hydrateFromApi()
+
+The local JWT decode (`hydrateFromToken`) is replaced by an API call:
+
+```typescript
+// apps/web/src/contexts/AuthContext.tsx
+
+// BEFORE (removed):
+const hydrateFromToken = useCallback((token: string) => {
+  const payload = decodeJwt(token);
+  if (payload) { setUser({ id: payload.sub, email: payload.email, role: payload.role }); }
+}, []);
+
+// AFTER:
+const hydrateFromApi = useCallback(async () => {
+  try {
+    const profile = await authApi.me();
+    setUser(profile);
+  } catch {
+    clearTokens();
+    setUser(null);
+  }
+}, []);
+```
+
+Boot sequence (called once in `useEffect` on mount):
+
+```
+1. Read localStorage → access token present?
+   ├── YES, not expired → hydrateFromApi()
+   ├── YES, expired     → authApi.refresh() → hydrateFromApi()
+   └── NO               → setUser(null), setIsLoading(false)
+```
+
+If `authApi.me()` throws `AuthExpiredError` (both tokens invalid), `clearTokens()` is called and the user is treated as logged out. The `AuthExpiredError` is absorbed here — it must not surface to the UI as an error toast.
+
+### 70.4 login() / signup() — Updated
+
+After receiving tokens, both methods call `hydrateFromApi()` instead of the old `hydrateFromToken()`:
+
+```typescript
+async login(credentials) {
+  const tokens = await authApi.login(credentials);
+  setTokens(tokens.accessToken, tokens.refreshToken);
+  document.cookie = 'sv_session=1; path=/; SameSite=Lax';
+  await hydrateFromApi();
+}
+
+async signup(data) {
+  const tokens = await authApi.signup(data);
+  setTokens(tokens.accessToken, tokens.refreshToken);
+  document.cookie = 'sv_session=1; path=/; SameSite=Lax';
+  await hydrateFromApi();
+}
+```
+
+### 70.5 logout() — Updated
+
+Clears the session cookie so `middleware.ts` sees the user as unauthenticated on the next request:
+
+```typescript
+async logout() {
+  const token = getAccessToken();
+  if (token) await authApi.logout(token).catch(() => {});
+  clearTokens();
+  document.cookie = 'sv_session=; path=/; max-age=0';
+  setUser(null);
+}
+```
+
+---
+
+## 71. Route Protection
+
+### 71.1 Middleware — sv_session Cookie Gate
+
+`apps/web/src/app/middleware.ts` provides a fast, server-side first line of defence. It reads the `sv_session` cookie (which carries no token data — it is a lightweight presence marker set on login and cleared on logout).
+
+```typescript
+// apps/web/src/app/middleware.ts
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+const PROTECTED_PREFIXES = ['/dashboard', '/profil', '/formateur'];
+
+export function middleware(request: NextRequest) {
+  const session = request.cookies.get('sv_session')?.value;
+  const { pathname } = request.nextUrl;
+
+  const isProtected = PROTECTED_PREFIXES.some(p => pathname.startsWith(p));
+  if (isProtected && !session) {
+    const loginUrl = new URL('/auth/login', request.url);
+    loginUrl.searchParams.set('redirect', pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ['/dashboard/:path*', '/profil/:path*', '/formateur/:path*'],
+};
+```
+
+**What the cookie guards:** unauthenticated navigation to protected prefixes.
+**What the cookie does NOT guard:** role-level access (e.g., FORMATEUR-only routes). Role enforcement is client-side via `useRequireAuth`.
+
+### 71.2 useRequireAuth Hook — Client Role Guard
+
+```typescript
+// apps/web/src/hooks/useRequireAuth.ts
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
+import type { Role } from '@/lib/types';
+
+export function useRequireAuth(requiredRole?: Role) {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (!user) { router.replace('/auth/login'); return; }
+    if (requiredRole && user.role !== requiredRole) { router.replace('/'); }
+  }, [user, isLoading, requiredRole, router]);
+
+  return { user, isLoading };
+}
+```
+
+Usage in a protected Client Component:
+
+```typescript
+'use client';
+export default function FormateurDashboard() {
+  const { user, isLoading } = useRequireAuth('FORMATEUR');
+  if (isLoading || !user) return null;
+  return <div>Dashboard for {user.firstName}</div>;
+}
+```
+
+### 71.3 Protection Matrix
+
+| Route prefix | Middleware (`sv_session`) | `useRequireAuth` role |
+|---|---|---|
+| `/catalogue` | No | No |
+| `/cours/[id]` | No | No |
+| `/profil` | Yes (blocks unauth) | Any authenticated |
+| `/dashboard` | Yes (blocks unauth) | Any authenticated |
+| `/formateur` | Yes (blocks unauth) | `FORMATEUR` |
+| `/auth/login` | No | No |
+| `/auth/signup` | No | No |
+
+### 71.4 Cookie Lifecycle
+
+| Event | Cookie action |
+|---|---|
+| `login()` success | `document.cookie = 'sv_session=1; path=/; SameSite=Lax'` |
+| `signup()` success | Same as login |
+| `logout()` | `document.cookie = 'sv_session=; path=/; max-age=0'` |
+| `AuthExpiredError` in boot | Cookie is NOT cleared by `apiRequest()`; `AuthContext.hydrateFromApi()` calls `clearTokens()` and also clears the cookie |
+| SSR / middleware | Cookie is readable via `request.cookies.get('sv_session')` |
+
+The cookie carries no authentication material. It is a presence marker only. A user who manually sets it but has no valid tokens in localStorage will pass the middleware but `useRequireAuth` will redirect them after `AuthContext` completes its boot cycle and finds no valid profile.
+
+---
+
+## 72. Course Catalogue
+
+### 72.1 Types
+
+```typescript
+// apps/web/src/lib/types.ts
+
+export interface CoursePreview {
+  id: string;
+  title: string;
+  description: string;
+  level: CourseLevel;
+  category: string;
+  thumbnailUrl?: string;
+  price: number;
+  formateurId: string;
+  formateur?: { firstName: string; lastName: string };
+  _count: { enrollments: number; modules: number };
+  createdAt: string;
+}
+
+export interface CourseListResult {
+  data: CoursePreview[];
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+
+export interface CourseListQuery {
+  search?: string;
+  category?: string;
+  level?: CourseLevel;
+  minPrice?: number;
+  maxPrice?: number;
+  page?: number;
+  limit?: number;
+  sortBy?: 'createdAt' | 'title' | 'price';
+  sortOrder?: 'asc' | 'desc';
+}
+```
+
+### 72.2 coursesApi.findAll(query?)
+
+```typescript
+// apps/web/src/lib/api.ts  (updated)
+findAll(query?: CourseListQuery): Promise<CourseListResult> {
+  const params = new URLSearchParams();
+  if (query?.search)   params.set('search', query.search);
+  if (query?.category) params.set('category', query.category);
+  if (query?.level)    params.set('level', query.level);
+  if (query?.minPrice !== undefined) params.set('minPrice', String(query.minPrice));
+  if (query?.maxPrice !== undefined) params.set('maxPrice', String(query.maxPrice));
+  if (query?.page)     params.set('page', String(query.page));
+  if (query?.limit)    params.set('limit', String(query.limit));
+  if (query?.sortBy)   params.set('sortBy', query.sortBy);
+  if (query?.sortOrder) params.set('sortOrder', query.sortOrder);
+  const qs = params.toString();
+  return request<CourseListResult>(`/courses${qs ? `?${qs}` : ''}`);
+}
+```
+
+### 72.3 Catalogue Page (RSC + ISR)
+
+```typescript
+// apps/web/src/app/catalogue/page.tsx
+import { coursesApi } from '@/lib/api';
+import CatalogueClient from './CatalogueClient';
+import type { CourseListQuery } from '@/lib/types';
+
+interface Props {
+  searchParams: Record<string, string | string[] | undefined>;
+}
+
+export default async function CataloguePage({ searchParams }: Props) {
+  const query: CourseListQuery = {
+    search:   searchParams.search   as string | undefined,
+    category: searchParams.category as string | undefined,
+    level:    searchParams.level    as string | undefined,
+    page:     searchParams.page ? Number(searchParams.page) : 1,
+    limit:    20,
+  };
+
+  const result = await coursesApi.findAll(query);
+
+  return <CatalogueClient initialResult={result} initialQuery={query} />;
+}
+```
+
+`coursesApi.findAll` is called with `fetch(url, { next: { revalidate: 60 } })` inside the `request()` helper. The ISR 60-second window is set there, not in the page.
+
+### 72.4 CatalogueClient — URL-Driven Filter State
+
+Filters are stored exclusively in the URL. `CatalogueClient` reads `initialResult` (server-rendered) and `initialQuery` (derived from URL) as props, then re-fetches client-side when the user changes filters.
+
+```
+User changes filter
+      │
+      ▼
+router.push(`/catalogue?search=…&category=…&page=1`)
+      │
+      ▼
+URL changes → Next.js re-renders CataloguePage (RSC)
+      │
+      ▼
+New initialResult passed to CatalogueClient
+      │
+      ▼
+CatalogueClient renders updated list
+```
+
+`CatalogueClient` does NOT store filter values in local React state. It derives displayed values from `initialQuery` (props). This keeps the URL as the single source of truth and makes the catalogue bookmarkable and shareable.
+
+Pagination follows the same pattern: clicking page N calls `router.push` with `?page=N` appended.
+
+### 72.5 loading.tsx and error.tsx
+
+```
+apps/web/src/app/catalogue/
+├── page.tsx          ← RSC, ISR, forwards searchParams
+├── CatalogueClient.tsx ← 'use client', renders list + filters + pagination
+├── loading.tsx       ← skeleton grid shown while RSC is fetching
+└── error.tsx         ← error boundary for fetch failures
+```
+
+`loading.tsx` renders a CSS skeleton grid matching the card layout (avoids layout shift). `error.tsx` renders an inline error with a retry button (calls `reset()` from the error boundary API).
+
+---
+
+## 73. Course Detail
+
+### 73.1 Types
+
+```typescript
+// apps/web/src/lib/types.ts
+
+export interface LessonPublic {
+  id: string;
+  title: string;
+  duration?: number;
+  order: number;
+  // No videoUrl — gated behind enrollment
+}
+
+export interface ModulePublic {
+  id: string;
+  title: string;
+  order: number;
+  lessons: LessonPublic[];
+  _count?: { lessons: number };
+}
+
+export interface CourseDetailDto extends CoursePreview {
+  modules: ModulePublic[];
+}
+
+export interface LessonContent extends LessonPublic {
+  videoUrl: string;
+  progress?: { completed: boolean; position: number };
+}
+
+export interface ModuleContent {
+  id: string;
+  title: string;
+  order: number;
+  lessons: LessonContent[];
+}
+
+export interface CourseContentDto {
+  courseId: string;
+  isEnrolled: boolean;
+  modules: ModuleContent[];
+}
+```
+
+### 73.2 coursesApi — findOne and findContent
+
+```typescript
+// apps/web/src/lib/api.ts  (additions to coursesApi)
+
+findOne(id: string): Promise<CourseDetailDto> {
+  return request<CourseDetailDto>(`/courses/${id}`);
+}
+
+findContent(id: string): Promise<CourseContentDto> {
+  return apiRequest<CourseContentDto>(`/courses/${id}/content`);
+  // apiRequest used (not request) — requires auth token + auto-refresh
+}
+```
+
+### 73.3 Course Detail Page — RSC Shell
+
+```typescript
+// apps/web/src/app/cours/[id]/page.tsx
+import { coursesApi } from '@/lib/api';
+import { notFound } from 'next/navigation';
+import CourseDetailClient from './CourseDetailClient';
+
+export default async function CourseDetailPage({ params }: { params: { id: string } }) {
+  let course;
+  try {
+    course = await coursesApi.findOne(params.id);
+  } catch {
+    notFound();
+  }
+
+  return <CourseDetailClient course={course} />;
+}
+```
+
+The RSC renders the public course shell (title, description, level, modules list without video URLs). The `CourseDetailClient` receives this as a prop and adds enrollment-gated content client-side.
+
+### 73.4 CourseDetailClient — useCourseContent Hook
+
+```typescript
+// apps/web/src/hooks/useCourseContent.ts
+import { useState, useEffect } from 'react';
+import { coursesApi } from '@/lib/api';
+import type { CourseContentDto } from '@/lib/types';
+
+export function useCourseContent(courseId: string) {
+  const [content, setContent] = useState<CourseContentDto | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    coursesApi.findContent(courseId)
+      .then(setContent)
+      .catch(err => {
+        // 401/403 means not enrolled — not a UI error, just no content
+        if (err?.status === 401 || err?.status === 403) { setContent(null); }
+        else { setError(err); }
+      })
+      .finally(() => setIsLoading(false));
+  }, [courseId]);
+
+  return { content, isLoading, error };
+}
+```
+
+In `CourseDetailClient.tsx`:
+
+```typescript
+'use client';
+import { useCourseContent } from '@/hooks/useCourseContent';
+
+export default function CourseDetailClient({ course }: { course: CourseDetailDto }) {
+  const { content, isLoading } = useCourseContent(course.id);
+
+  return (
+    <div>
+      {/* Always rendered (from RSC props — no loading state): */}
+      <CourseHeader course={course} />
+      <ModuleList modules={course.modules} content={content} />
+
+      {/* Rendered when enrolled content is ready: */}
+      {isLoading ? <EnrollmentSkeleton /> : !content?.isEnrolled ? <EnrollButton courseId={course.id} /> : null}
+    </div>
+  );
+}
+```
+
+### 73.5 Module/Chapter Rendering
+
+Modules are rendered from the public `course.modules` prop (available immediately from SSR). Each module shows its lessons. If `content` is loaded and `content.isEnrolled`, the video URL and progress data from `content.modules` are merged in.
+
+```
+course.modules (SSR, public)
+      │
+      ▼
+ModuleList renders module titles + lesson titles (no video)
+      │
+      ├── isLoading → show skeleton on video cells
+      └── content loaded + enrolled → overlay video URLs + progress badges
+```
+
+### 73.6 File Structure
+
+```
+apps/web/src/app/cours/[id]/
+├── page.tsx              ← RSC: fetches CourseDetailDto, renders CourseDetailClient
+├── CourseDetailClient.tsx ← 'use client': enrollment gate, useCourseContent
+├── loading.tsx           ← skeleton for RSC shell fetch
+└── error.tsx             ← error boundary for findOne() failure
+```
+
+---
+
+## 74. Error and Loading Management
+
+### 74.1 Next.js File Convention
+
+Each route segment that can fail or be slow gets co-located `loading.tsx` and `error.tsx` files:
+
+```
+app/
+├── catalogue/
+│   ├── page.tsx
+│   ├── loading.tsx    ← skeleton grid
+│   └── error.tsx      ← inline retry
+└── cours/[id]/
+    ├── page.tsx
+    ├── loading.tsx    ← skeleton hero + module list
+    └── error.tsx      ← not-found-friendly error
+```
+
+`loading.tsx` is activated automatically by Next.js as a React Suspense fallback while the RSC segment is streaming. `error.tsx` is activated by any thrown error escaping the segment, including API errors.
+
+### 74.2 Error Classification and Handling
+
+| Error class | Source | How handled |
+|---|---|---|
+| `AuthExpiredError` | `apiRequest()` after failed refresh | Absorbed in `AuthContext.hydrateFromApi()` — triggers silent logout, no UI error |
+| `ApiError` (status 404) | `coursesApi.findOne()` | `notFound()` called in RSC — renders Next.js 404 page |
+| `ApiError` (status 401/403) | `useCourseContent()` | Treated as "not enrolled" — no error state, just no content |
+| `ApiError` (status 5xx / network) | Any API call in RSC | Propagates to `error.tsx` boundary |
+| `ApiError` (status 4xx, form) | Auth/form submissions | Caught in component, shown as inline field/form error |
+
+### 74.3 Error Boundary Pattern (error.tsx)
+
+```typescript
+// apps/web/src/app/catalogue/error.tsx
+'use client';
+import { useEffect } from 'react';
+
+interface Props { error: Error & { digest?: string }; reset: () => void; }
+
+export default function CatalogueError({ error, reset }: Props) {
+  useEffect(() => { console.error(error); }, [error]);
+
+  return (
+    <div role="alert">
+      <p>Impossible de charger le catalogue.</p>
+      <button onClick={reset}>Réessayer</button>
+    </div>
+  );
+}
+```
+
+### 74.4 Loading Skeleton Pattern (loading.tsx)
+
+```typescript
+// apps/web/src/app/catalogue/loading.tsx
+export default function CatalogueLoading() {
+  return (
+    <div className="catalogue-skeleton" aria-busy="true" aria-label="Chargement du catalogue…">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="course-card-skeleton" />
+      ))}
+    </div>
+  );
+}
+```
+
+The skeleton dimensions must match the real `CourseCard` to prevent CLS (Cumulative Layout Shift). The `aria-busy` and `aria-label` attributes are required for accessibility (screen reader announces loading state).
+
+### 74.5 Invariants
+
+- `AuthExpiredError` is **never** shown to the user as an error. It always triggers a silent logout redirect.
+- API errors from RSC propagate to `error.tsx`; API errors from Client Components are caught locally in the component or hook and handled without a boundary.
+- `loading.tsx` skeletons must match the real layout dimensions to keep CLS < 0.1 (§ Web Performance targets).
+
+---
+
+## 75. Folder Structure — New and Modified Files
+
+```
+apps/web/src/
+├── app/
+│   ├── middleware.ts                          ← NEW: sv_session cookie gate
+│   ├── catalogue/
+│   │   ├── page.tsx                           ← MODIFIED: searchParams → query
+│   │   ├── CatalogueClient.tsx                ← MODIFIED: URL-driven filters
+│   │   ├── loading.tsx                        ← NEW: skeleton grid
+│   │   └── error.tsx                          ← NEW: retry boundary
+│   └── cours/[id]/
+│       ├── page.tsx                           ← MODIFIED: RSC shell only
+│       ├── CourseDetailClient.tsx             ← NEW: enrollment gate + content
+│       ├── loading.tsx                        ← NEW: skeleton hero
+│       └── error.tsx                          ← NEW: 404-friendly boundary
+├── contexts/
+│   └── AuthContext.tsx                        ← MODIFIED: hydrateFromApi()
+├── hooks/
+│   ├── useRequireAuth.ts                      ← NEW: client role guard
+│   └── useCourseContent.ts                    ← NEW: enrollment-gated content
+└── lib/
+    ├── api.ts                                 ← MODIFIED: authApi.me(), coursesApi query params
+    └── types.ts                               ← MODIFIED: enriched AuthUser, Course* DTOs
+```
+
+---
+
+## 76. Frontend Types Additions
+
+Full set of new/modified types in `apps/web/src/lib/types.ts`:
+
+```typescript
+// --- Auth ---
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  firstName: string;    // NEW
+  lastName: string;     // NEW
+  role: Role;
+  avatar?: string;      // NEW
+}
+
+// --- Catalogue ---
+
+export interface CoursePreview {
+  id: string;
+  title: string;
+  description: string;
+  level: CourseLevel;
+  category: string;
+  thumbnailUrl?: string;
+  price: number;
+  formateurId: string;
+  formateur?: { firstName: string; lastName: string };
+  _count: { enrollments: number; modules: number };
+  createdAt: string;
+}
+
+export interface CourseListResult {
+  data: CoursePreview[];
+  meta: { total: number; page: number; limit: number; totalPages: number };
+}
+
+export interface CourseListQuery {
+  search?: string;
+  category?: string;
+  level?: CourseLevel;
+  minPrice?: number;
+  maxPrice?: number;
+  page?: number;
+  limit?: number;
+  sortBy?: 'createdAt' | 'title' | 'price';
+  sortOrder?: 'asc' | 'desc';
+}
+
+// --- Course Detail (public) ---
+
+export interface LessonPublic {
+  id: string;
+  title: string;
+  duration?: number;
+  order: number;
+}
+
+export interface ModulePublic {
+  id: string;
+  title: string;
+  order: number;
+  lessons: LessonPublic[];
+  _count?: { lessons: number };
+}
+
+export interface CourseDetailDto extends CoursePreview {
+  modules: ModulePublic[];
+}
+
+// --- Course Content (enrolled) ---
+
+export interface LessonContent extends LessonPublic {
+  videoUrl: string;
+  progress?: { completed: boolean; position: number };
+}
+
+export interface ModuleContent {
+  id: string;
+  title: string;
+  order: number;
+  lessons: LessonContent[];
+}
+
+export interface CourseContentDto {
+  courseId: string;
+  isEnrolled: boolean;
+  modules: ModuleContent[];
+}
+```
+
+---
+
+## 77. Key Design Invariants
+
+- **`localStorage` is client-only** — RSC pages never access tokens. Public data is fetched server-side without auth; enrolled content is fetched client-side by `useCourseContent()`.
+- **`sv_session` is a presence marker, not a credential** — it carries no token material. A spoofed cookie passes the middleware but fails `hydrateFromApi()` (no valid token in localStorage), causing `useRequireAuth()` to redirect.
+- **`AuthExpiredError` is terminal and silent** — it is absorbed in `AuthContext.hydrateFromApi()`, triggers `clearTokens()` + cookie clear, and redirects to login. No UI error is shown.
+- **URL is the single source of truth for catalogue filters** — `CatalogueClient` derives all display state from props (`initialQuery`). There is no parallel local React state for filters.
+- **Public course data is SSR + ISR; enrolled content is CSR** — `GET /courses/:id` is cached 60 s server-side (no token needed). `GET /courses/:id/content` is always fetched fresh client-side (requires Bearer token).
+- **`notFound()` on 404, error boundary on 5xx** — a missing course calls `notFound()` (renders the Next.js 404 page); a server error propagates to `error.tsx` (renders a retry boundary).
+- **Skeleton dimensions must match real layout** — `loading.tsx` skeletons are sized to match their real counterparts to keep CLS < 0.1.
+- **Role enforcement is client-side only** — `middleware.ts` gates presence (authenticated vs. not); `useRequireAuth(role)` gates role. The backend enforces authorisation with `JwtAccessGuard` + `RolesGuard` regardless.

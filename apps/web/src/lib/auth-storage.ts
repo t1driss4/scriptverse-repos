@@ -2,6 +2,7 @@ import type { Role } from './types';
 
 const ACCESS_KEY = 'sv_access_token';
 const REFRESH_KEY = 'sv_refresh_token';
+const LOGGED_IN_COOKIE = 'sv_logged_in';
 
 export interface JwtPayload {
   sub: string;
@@ -24,11 +25,14 @@ export function getRefreshToken(): string | null {
 export function setTokens(access: string, refresh: string): void {
   localStorage.setItem(ACCESS_KEY, access);
   localStorage.setItem(REFRESH_KEY, refresh);
+  // Cookie readable by Next.js middleware (edge runtime has no localStorage access)
+  document.cookie = `${LOGGED_IN_COOKIE}=1; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Strict`;
 }
 
 export function clearTokens(): void {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
+  document.cookie = `${LOGGED_IN_COOKIE}=; path=/; max-age=0; SameSite=Strict`;
 }
 
 export function decodeJwt(token: string): JwtPayload | null {

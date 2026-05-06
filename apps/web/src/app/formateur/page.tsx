@@ -211,7 +211,7 @@ export default function FormateurPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar role="FORMATEUR" userName={user ? `${user.email.split('@')[0]}` : 'Formateur'} />
+      <Navbar />
 
       <PageTransition>
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 space-y-8">
