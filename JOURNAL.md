@@ -643,6 +643,107 @@ Le calcul de progression est fait dans le service en combinant `Enrollment` + `M
 
 ---
 
+## 2026-05-06 — Ticket 42c4f (phase 2) : Middleware, profil enrichi, navbar réelle, dashboard live, error boundaries
+
+### Résumé
+
+Deuxième phase du branchement API/frontend : le front Next.js est maintenant intégralement connecté à l'API sur les flux d'authentification et de données apprenant. Un middleware Edge protège les routes privées via un cookie de présence. L'`AuthContext` enrichit le profil JWT avec les données réelles (`GET /auth/me`). La navbar lit le vrai état auth. Le dashboard remplace toutes les mock-data par `enrollmentsApi.findMine()`. Deux error boundaries et un loading skeleton complètent la résilience du routing.
+
+### Architecture
+
+**Middleware Edge et cookie `sv_logged_in`**
+
+Le runtime Edge de Next.js ne peut pas accéder au `localStorage`. La solution : un cookie `sv_logged_in` en HTTP-only simulé — il est positionné par `auth-storage.ts` (côté navigateur, `document.cookie`) lors de chaque `setTokens()` et effacé lors de `clearTokens()`. Le middleware Edge lit ce cookie avec `request.cookies.has('sv_logged_in')` pour décider de la redirection sans jamais toucher aux tokens JWT eux-mêmes (qui restent dans `localStorage`).
+
+```
+Flux: setTokens(access, refresh)
+  → localStorage["access_token"] = access
+  → localStorage["refresh_token"] = refresh
+  → document.cookie = "sv_logged_in=1; max-age=604800; SameSite=Strict"
+
+middleware.ts (Edge):
+  isLoggedIn = cookies.has("sv_logged_in")
+  /dashboard, /formateur + !isLoggedIn → redirect /auth/login?redirect=<pathname>
+  /auth/login, /auth/signup + isLoggedIn  → redirect /dashboard
+```
+
+**Enrichissement du profil dans `AuthContext`**
+
+Le token JWT ne contient que `sub`, `email`, `role`. Après toute opération d'authentification (montage, login, signup, refresh), `enrichWithProfile()` appelle `GET /auth/me` et fusionne `firstName`, `lastName`, `avatar` dans le state. En cas d'échec de ce second appel, l'utilisateur reste authentifié avec les données JWT de base — la session n'est pas invalidée.
+
+**Navbar entièrement réactée**
+
+Avant : props statiques (`role?`, `userName?`). Après : `'use client'` + `useAuth()`. Le `displayName` est calculé depuis `firstName`+`lastName` ou dégradé vers l'email. Le lien "Mes cours" (formateur) n'est rendu que si `user?.role === 'FORMATEUR'`. L'état non-authentifié affiche un lien "Connexion" ; l'état authentifié affiche l'initiale, le nom, et un bouton logout.
+
+**Dashboard live**
+
+Toutes les constantes `mock*` supprimées. Un `useEffect` lance `enrollmentsApi.findMine()` au montage. Les KPIs (cours en cours, cours terminés, leçons complétées) sont calculés dynamiquement depuis le tableau `enrollments`. Un skeleton `animate-pulse` s'affiche pendant le fetch ; une bannière d'erreur s'affiche en cas d'échec réseau.
+
+### Ce qui a été implémenté
+
+**Middleware Edge**
+
+| Fichier | Rôle |
+|---|---|
+| `apps/web/src/middleware.ts` | Route guard Edge — protège `/dashboard`, `/formateur` ; redirige hors `/auth/*` si connecté |
+
+**Couche auth**
+
+| Fichier | Modification |
+|---|---|
+| `apps/web/src/lib/auth-storage.ts` | Ajout pose/effacement du cookie `sv_logged_in` dans `setTokens` / `clearTokens` |
+| `apps/web/src/lib/api.ts` | Ajout de `authApi.me()` → `GET /auth/me` retournant `User` |
+| `apps/web/src/contexts/AuthContext.tsx` | `AuthUser` étendu (`firstName?`, `lastName?`, `avatar?`) ; `enrichWithProfile()` ; tous les flux auth appellent enrich après decode |
+
+**Composants**
+
+| Fichier | Modification |
+|---|---|
+| `apps/web/src/components/layout/navbar.tsx` | Réécriture complète — `useAuth()`, `displayName`, rendu conditionnel rôle, logout |
+| `apps/web/src/app/dashboard/page.tsx` | Suppression mock-data, fetch réel `enrollmentsApi.findMine()`, skeleton, KPIs calculés, `EnrollmentCard` |
+
+**Error boundaries et loading states**
+
+| Fichier | Rôle |
+|---|---|
+| `apps/web/src/app/catalogue/error.tsx` | Error boundary catalogue — icône erreur, retry, lien accueil |
+| `apps/web/src/app/cours/[id]/error.tsx` | Error boundary fiche cours — retry, retour catalogue |
+| `apps/web/src/app/cours/[id]/loading.tsx` | Loading skeleton fiche cours (Suspense streaming) |
+
+### Statut des tests
+
+| Suite | Cible | Statut |
+|---|---|---|
+| `__tests__/middleware.test.ts` | Toutes les branches de routage Edge (protégé, auth page, public) | Écrits, non exécutés en CI |
+| `contexts/__tests__/AuthContext.test.tsx` | Montage, login, enrich profil, fallback sur échec | Écrits, non exécutés en CI |
+| `catalogue/__tests__/error.test.tsx` | Rendu error boundary catalogue, retry, navigation | Écrits, non exécutés en CI |
+| `catalogue/__tests__/loading.test.tsx` | Rendu skeleton catalogue | Écrits, non exécutés en CI |
+| `cours/[id]/__tests__/error.test.tsx` | Rendu error boundary fiche cours | Écrits, non exécutés en CI |
+| `cours/[id]/__tests__/loading.test.tsx` | Rendu skeleton fiche cours | Écrits, non exécutés en CI |
+
+### Fichiers clés
+
+| Fichier | Rôle |
+|---|---|
+| `apps/web/src/middleware.ts` | Middleware Edge Next.js — protection des routes privées |
+| `apps/web/src/lib/auth-storage.ts` | Gestion tokens localStorage + cookie `sv_logged_in` |
+| `apps/web/src/lib/api.ts` | `authApi.me()` ajouté |
+| `apps/web/src/contexts/AuthContext.tsx` | Profil enrichi, `AuthUser` complet |
+| `apps/web/src/components/layout/navbar.tsx` | Navbar réactive — état auth réel |
+| `apps/web/src/app/dashboard/page.tsx` | Dashboard live — données inscriptions réelles |
+| `apps/web/src/app/catalogue/error.tsx` | Error boundary catalogue |
+| `apps/web/src/app/cours/[id]/error.tsx` | Error boundary fiche cours |
+| `apps/web/src/app/cours/[id]/loading.tsx` | Loading skeleton fiche cours |
+
+### Notes
+
+- Le cookie `sv_logged_in` est intentionnellement non-HttpOnly pour être écrit depuis `document.cookie` côté navigateur — il ne porte aucun secret (les JWT restent dans `localStorage`), son unique rôle est de signaler la présence d'une session au middleware Edge.
+- `enrichWithProfile` a un `catch` silencieux délibéré : la dégradation vers les données JWT de base est préférable à une déconnexion forcée si `GET /auth/me` est temporairement indisponible.
+- Le dashboard retire la stat "Quiz réussis" faute de source de données réelle ; elle sera réintroduite quand `QuizAttempt` sera exposé par l'API.
+- En v3 : brancher la progression depuis la page lecteur de leçon (`ModuleProgress`) ; ajouter le loading skeleton sur le catalogue ; activer le CI Vitest.
+
+---
+
 ## 2026-04-27 — Ticket d78db: "Ajouter des animations aux pages (UI)"
 
 ### Résumé

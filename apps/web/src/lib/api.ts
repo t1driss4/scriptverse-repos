@@ -1,5 +1,5 @@
 import { apiRequest } from './api-client';
-import type { Course, CourseModule, Lesson, Enrollment, EnrollmentProgress, Quiz, QuizQuestion } from './types';
+import type { User, Course, CourseModule, Lesson, Enrollment, EnrollmentProgress, Quiz, QuizQuestion } from './types';
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
@@ -64,6 +64,10 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify({ email }),
     });
+  },
+
+  me() {
+    return apiRequest<User>('/auth/me');
   },
 };
 

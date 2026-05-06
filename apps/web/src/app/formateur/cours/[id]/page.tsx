@@ -351,7 +351,7 @@ function QuizPanel({
 function LessonRow({
   lesson,
   index,
-  moduleId,
+  moduleId: _moduleId,
   token,
   onUpdated,
   onRemoved,
@@ -678,7 +678,7 @@ export default function CourseEditorPage({ params }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [params.id, isNew]);
+  }, [params.id, isNew, token]);
 
   useEffect(() => {
     if (!authLoading) {

@@ -9,7 +9,7 @@ vi.mock('framer-motion', () => ({
     div: ({
       children,
       className,
-      variants,
+      variants: _variants,
       initial,
       animate,
       transition,
